@@ -20,6 +20,43 @@ proofs are public: **[the engine case ↗](https://app.perfloop.ai/t/oss/case_9r
 > short lookup, `strings.Index` is faster. It implements **simple** folding, not
 > full folding (`ß` matches `ẞ`, never `ss`).
 
+## Use it
+
+```sh
+go get github.com/tsenart/casei
+```
+
+```go
+// One needle. The correct, allocation-free replacement for
+// strings.Contains(strings.ToLower(haystack), strings.ToLower(needle)).
+if casei.ContainsFold(line, "payment declined") {
+    alert(line)
+}
+
+// Byte offset instead of a bool.
+at := casei.IndexFold(line, "payment declined") // -1 when absent
+
+// Many needles, one pass. Leftmost match wins; ties go to the lowest
+// pattern index.
+m := casei.NewMatcher([]string{"fatal panic", "oom killed", "segfault"})
+if match, ok := m.Find(line); ok {
+    fmt.Println(m.Patterns()[match.Pattern], match.Start)
+}
+```
+
+`NewMatcher` compiles the pattern set once; reuse the `*Matcher` across
+searches, and share it freely — `Find` is safe for concurrent use. Both entry
+points allocate nothing per search.
+
+Matching is Unicode **simple** case folding, identical to Go's `regexp` with
+`(?i)`: `k` matches the Kelvin sign U+212A, `ſ` matches `s`, `σ`/`ς`/`Σ` all
+match, and `ß` matches `ẞ` but never `ss`. That is not what lowercasing both
+sides gives you — see [Semantics](#what-it-is).
+
+Requires Go 1.22+. The AVX-512 and AVX2 paths are chosen at runtime on x86-64;
+every other platform runs the portable path, which returns identical results
+(see [Limitations](#limitations) for what that costs).
+
 ## Results
 
 `casei` versus the full field — **every competitor built from source at full

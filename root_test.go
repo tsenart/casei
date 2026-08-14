@@ -741,7 +741,7 @@ func BenchmarkPairShuftiMatcher(b *testing.B) {
 			if _, ok := matcher.Find(tc.haystack); ok {
 				b.Fatal("unexpected match")
 			}
-			for b.Loop() {
+			for i := 0; i < b.N; i++ {
 				_, _ = matcher.Find(tc.haystack)
 			}
 		})
@@ -752,7 +752,7 @@ func BenchmarkTripleSkipBytes(b *testing.B) {
 	plan := newSearchPlan([]string{"fatal panic", "segfault detected"})
 	haystack := strings.Repeat("x", 1<<20)
 	b.SetBytes(int64(len(haystack)))
-	for b.Loop() {
+	for i := 0; i < b.N; i++ {
 		_ = tripleSkipBytes(haystack, 0, &plan.triples)
 	}
 }
@@ -761,7 +761,7 @@ func BenchmarkTriplePlan(b *testing.B) {
 	plan := newSearchPlan([]string{"fatal panic", "segfault detected"})
 	haystack := strings.Repeat("x", 1<<20)
 	b.SetBytes(int64(len(haystack)))
-	for b.Loop() {
+	for i := 0; i < b.N; i++ {
 		_, _ = plan.find(haystack)
 	}
 }

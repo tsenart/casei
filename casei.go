@@ -1,9 +1,25 @@
-// Package casei is an open benchmark arena for UTF-8 case-insensitive
-// substring search.
+// Package casei searches UTF-8 text case-insensitively under Unicode simple
+// case folding, allocation-free.
 //
-// IndexFold is the function under optimization. The tests define its
-// semantics, the benchmarks in bench_test.go define the competition, and
-// CONTEXT.md catalogs every previously known technique.
+// It answers two shapes of the same question. IndexFold finds one needle;
+// Matcher finds any of a pattern set and reports the leftmost match. Both run
+// one compiled search plan, with runtime-gated AVX-512 and AVX2 block
+// transitions on x86-64 and a portable path everywhere else, so results are
+// identical on every machine while throughput is not.
+//
+// Reach for it when the alternative is lowercasing both sides and searching:
+// that idiom allocates two copies, shifts byte offsets, and is not the same
+// matching. See the semantics below.
+//
+//	if casei.ContainsFold(line, "payment declined") { ... }
+//
+//	m := casei.NewMatcher([]string{"fatal panic", "oom killed"})
+//	if match, ok := m.Find(line); ok { use(match.Pattern, match.Start) }
+//
+// The repository around this package is also an open benchmark arena: its
+// tests define these semantics, arena/ measures this engine against the
+// competing implementations built from source, and CONTEXT.md catalogs the
+// known techniques.
 //
 // Semantics — Unicode simple case folding over UTF-8:
 //
@@ -35,6 +51,14 @@ func IndexFold(haystack, needle string) int {
 		return -1
 	}
 	return match.Start
+}
+
+// ContainsFold reports whether needle occurs in haystack under Unicode simple
+// case folding. It is IndexFold(haystack, needle) >= 0, and exists because it
+// is the shape most callers want: the correct, allocation-free replacement for
+// strings.Contains(strings.ToLower(haystack), strings.ToLower(needle)).
+func ContainsFold(haystack, needle string) bool {
+	return IndexFold(haystack, needle) >= 0
 }
 
 // RuntimeVectorBits reports the widest runtime-gated block transition this
