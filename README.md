@@ -64,105 +64,100 @@ strength, each dispatching its widest path**, on the two Intel microarchitecture
 that expose the required AVX-512, independently reproduced on bare-metal cloud
 hosts.
 
-**casei is the fastest on every one of 33 rows, on both microarchitectures** — median **1.7×** (Sapphire Rapids) to **1.9×** (Ice Lake) faster than the next-fastest engine, from 1.1× on the tightest streaming row to 25× on the adversarial one. Throughput in GB/s, **bold = casei**; `casei vs #2` is casei over the fastest other engine on that row.
+**casei is the fastest on every one of 33 rows, on both microarchitectures** — median **1.9×** (Ice Lake) to **1.7×** (Sapphire Rapids) faster than the next-fastest engine, from 1.10× on the tightest streaming row to 25.8× on the adversarial one. Throughput in GB/s, **bold = casei**; `casei vs #2` is casei over the fastest other engine on that row.
 
-| workload | casei | Vectorscan | veloz | PCRE2-JIT | StringZilla | rust/regex | casei vs #2 |
+| row | casei | Vectorscan | veloz | PCRE2-JIT | StringZilla | rust/regex | casei vs #2 |
 |---|---|---|---|---|---|---|---|
-| `log_miss_1mb` | **56.5** | 52.1 | 8.3 | 23.4 | 11.5 | 9.0 | **1.09×** |
-| `code_miss_256kb` | **56.1** | 29.2 | 8.3 | 23.3 | 10.9 | 9.1 | **1.92×** |
-| `prose_miss_1mb` | **56.2** | 19.7 | 8.3 | 23.4 | 12.3 | 9.0 | **2.40×** |
-| `ru_miss_1mb` | **27.6** | 16.6 | – | 22.8 | 6.5 | 9.0 | **1.21×** |
-| `multi_N512_miss_log_64kb` | **27.7** | 6.8 | – | 19.3 | 0.0 | 0.5 | **1.43×** |
-| `latency_match_start_1kb` | **116.4** | 2.9 | 69.3 | 4.1 | 4.2 | 3.2 | **1.68×** |
-| `samechar_miss_64kb` | **67.9** | 44.4 | 8.3 | 22.2 | 11.0 | 0.5 | **1.53×** |
-| `periodic_miss_64kb` | **35.5** | 0.6 | 8.3 | 28.5 | 11.0 | 0.5 | **1.25×** |
-| `torture_miss_64kb` | **13.0** | 0.1 | 0.5 | 0.3 | 0.1 | 0.3 | **25.70×** |
-| `log_hit_sparse_1mb` | **32.0** | 1.5 | 8.0 | 7.3 | 10.4 | 6.5 | **3.08×** |
+| `log_miss_1mb` | **56.4** | 51.3 | 8.3 | 23.3 | 12.3 | 9.0 | **1.10×** |
+| `code_miss_256kb` | **56.1** | 29.1 | 8.3 | 23.3 | 11.5 | 9.1 | **1.93×** |
+| `prose_miss_1mb` | **56.3** | 19.5 | 8.3 | 23.2 | 12.1 | 9.0 | **2.43×** |
+| `ru_miss_1mb` | **27.5** | 16.5 | – | 22.8 | 6.5 | 9.0 | **1.21×** |
+| `multi_N512_miss_log_64kb` | **27.7** | 6.8 | – | 19.5 | 0.0 | 0.5 | **1.42×** |
+| `multi_N512_miss_hazard_64kb` | **9.8** | 4.6 | – | 0.0 | 0.0 | 0.5 | **2.14×** |
+| `latency_match_start_1kb` | **118.1** | 2.9 | 70.1 | 4.6 | 4.4 | 3.3 | **1.68×** |
+| `samechar_miss_64kb` | **67.6** | 44.7 | 8.3 | 22.3 | 11.0 | 0.5 | **1.51×** |
+| `periodic_miss_64kb` | **35.5** | 0.6 | 8.3 | 28.4 | 11.0 | 0.5 | **1.25×** |
+| `torture_miss_64kb` | **13.1** | 0.1 | 0.5 | 0.3 | 0.1 | 0.3 | **25.76×** |
+| `log_hit_sparse_1mb` | **32.1** | 1.5 | 8.0 | 7.2 | 10.3 | 6.6 | **3.11×** |
 
 <details>
 <summary><b>Full 33-row tables — Sapphire Rapids and Ice Lake, every entrant</b></summary>
 
-> Measured at the engine as merged in [#1](https://github.com/tsenart/casei/pull/1)
-> (commit `fa0dff6`). Kernel improvements merged since ([#3](https://github.com/tsenart/casei/pull/3),
-> +21.5% on the Shufti kernels) are **not yet reflected** — if you reproduce today
-> you should see casei slightly faster than these tables. A full refresh lands
-> when the current optimization pass completes.
-
-#### Sapphire Rapids (Xeon 8481C) — GB/s (higher is better; **bold** = casei, the fastest on every row)
+#### Sapphire Rapids (Xeon 8481C) — GB/s (higher is better; **bold** = casei, fastest on every row)
 
 | row | casei | Vectorscan | veloz | PCRE2-JIT | StringZilla | rust/regex | casei vs #2 |
 |---|---|---|---|---|---|---|---|
-| `latency_match_start_1kb` | **116.4** | 2.9 | 69.3 | 4.1 | 4.2 | 3.2 | **1.68×** |
-| `samechar_miss_64kb` | **67.9** | 44.4 | 8.3 | 22.2 | 11.0 | 0.5 | **1.53×** |
-| `log_miss_1mb` | **56.5** | 52.1 | 8.3 | 23.4 | 11.5 | 9.0 | **1.09×** |
-| `prose_miss_1mb` | **56.2** | 19.7 | 8.3 | 23.4 | 12.3 | 9.0 | **2.40×** |
-| `code_miss_256kb` | **56.1** | 29.2 | 8.3 | 23.3 | 10.9 | 9.1 | **1.92×** |
-| `log_miss_64kb` | **53.5** | 44.3 | 8.3 | 22.0 | 12.3 | 8.9 | **1.21×** |
-| `log_needle8_64kb` | **53.3** | 6.8 | 8.3 | 21.1 | 17.8 | 8.9 | **2.53×** |
-| `log_needle16_64kb` | **53.3** | 35.6 | 8.3 | 22.1 | 11.8 | 8.9 | **1.50×** |
-| `log_needle3_64kb` | **53.0** | 44.7 | 8.3 | 22.0 | 18.0 | 13.9 | **1.19×** |
-| `log_needle32_64kb` | **52.8** | 6.8 | 8.3 | 21.5 | 10.9 | 8.9 | **2.45×** |
-| `multi_N8_miss_ru_1mb` | **38.8** | 5.6 | – | 20.8 | 0.8 | 9.0 | **1.86×** |
-| `multi_N64_miss_ru_64kb` | **37.1** | 7.1 | – | 21.3 | 0.1 | 0.5 | **1.74×** |
-| `multi_N8_hazard_hit_1mb` | **36.6** | 6.8 | – | 2.7 | 0.9 | 31.3 | **1.17×** |
-| `periodic_miss_64kb` | **35.5** | 0.6 | 8.3 | 28.5 | 11.0 | 0.5 | **1.25×** |
-| `log_hit_sparse_1mb` | **32.0** | 1.5 | 8.0 | 7.3 | 10.4 | 6.5 | **3.08×** |
-| `multi_N8_miss_log_1mb` | **29.1** | 6.8 | – | 14.2 | 1.6 | 9.0 | **2.05×** |
-| `multi_N512_miss_log_64kb` | **27.7** | 6.8 | – | 19.3 | 0.0 | 0.5 | **1.43×** |
-| `multi_N64_miss_log_64kb` | **27.7** | 6.8 | – | 21.9 | 0.2 | 0.5 | **1.27×** |
-| `ru_miss_1mb` | **27.6** | 16.6 | – | 22.8 | 6.5 | 9.0 | **1.21×** |
-| `ru_hit_sparse_1mb` | **24.6** | 0.8 | – | 19.7 | 6.5 | 8.5 | **1.25×** |
-| `latency_match_mid_1kb` | **22.5** | 2.4 | 14.5 | 2.6 | 3.7 | 2.5 | **1.55×** |
-| `kelvin_hazard_1mb` | **20.3** | 1.8 | – | 1.1 | 12.9 | 8.6 | **1.57×** |
-| `multi_N8_miss_hazard_1mb` | **18.4** | 6.7 | – | 0.3 | 0.9 | 2.8 | **2.73×** |
-| `multi_N2_miss_log_1mb` | **15.3** | 11.6 | – | 0.7 | 5.8 | 5.5 | **1.31×** |
-| `log_miss_1kb` | **13.9** | 5.0 | 7.9 | 5.2 | 5.5 | 3.8 | **1.76×** |
+| `latency_match_start_1kb` | **118.1** | 2.9 | 70.1 | 4.6 | 4.4 | 3.3 | **1.68×** |
+| `samechar_miss_64kb` | **67.6** | 44.7 | 8.3 | 22.3 | 11.0 | 0.5 | **1.51×** |
+| `log_miss_1mb` | **56.4** | 51.3 | 8.3 | 23.3 | 12.3 | 9.0 | **1.10×** |
+| `prose_miss_1mb` | **56.3** | 19.5 | 8.3 | 23.2 | 12.1 | 9.0 | **2.43×** |
+| `code_miss_256kb` | **56.1** | 29.1 | 8.3 | 23.3 | 11.5 | 9.1 | **1.93×** |
+| `log_miss_64kb` | **53.4** | 45.2 | 8.3 | 22.3 | 12.3 | 8.9 | **1.18×** |
+| `log_needle3_64kb` | **53.3** | 45.0 | 8.3 | 22.1 | 18.0 | 13.8 | **1.19×** |
+| `log_needle32_64kb` | **53.3** | 6.8 | 8.3 | 21.0 | 11.0 | 8.9 | **2.54×** |
+| `log_needle16_64kb` | **53.3** | 36.0 | 8.3 | 22.1 | 11.8 | 8.9 | **1.48×** |
+| `log_needle8_64kb` | **53.0** | 6.8 | 8.3 | 20.9 | 18.0 | 8.9 | **2.53×** |
+| `multi_N8_miss_ru_1mb` | **38.6** | 5.7 | – | 23.3 | 0.8 | 9.0 | **1.66×** |
+| `multi_N64_miss_ru_64kb` | **37.0** | 7.2 | – | 21.8 | 0.1 | 0.5 | **1.70×** |
+| `multi_N8_hazard_hit_1mb` | **35.5** | 6.7 | – | 2.7 | 0.9 | 31.6 | **1.13×** |
+| `periodic_miss_64kb` | **35.5** | 0.6 | 8.3 | 28.4 | 11.0 | 0.5 | **1.25×** |
+| `log_hit_sparse_1mb` | **32.1** | 1.5 | 8.0 | 7.2 | 10.3 | 6.6 | **3.11×** |
+| `multi_N8_miss_log_1mb` | **29.3** | 6.8 | – | 14.3 | 1.6 | 9.0 | **2.04×** |
+| `multi_N64_miss_log_64kb` | **27.7** | 6.8 | – | 22.0 | 0.2 | 0.5 | **1.26×** |
+| `multi_N512_miss_log_64kb` | **27.7** | 6.8 | – | 19.5 | 0.0 | 0.5 | **1.42×** |
+| `ru_miss_1mb` | **27.5** | 16.5 | – | 22.8 | 6.5 | 9.0 | **1.21×** |
+| `ru_hit_sparse_1mb` | **24.5** | 0.8 | – | 19.3 | 6.5 | 8.5 | **1.27×** |
+| `latency_match_mid_1kb` | **22.7** | 2.4 | 14.5 | 2.6 | 3.8 | 2.5 | **1.57×** |
+| `kelvin_hazard_1mb` | **20.3** | 1.8 | – | 1.2 | 12.8 | 8.5 | **1.58×** |
+| `multi_N8_miss_hazard_1mb` | **18.3** | 6.8 | – | 0.3 | 0.9 | 2.8 | **2.67×** |
+| `multi_N2_miss_log_1mb` | **15.2** | 11.5 | – | 0.7 | 5.8 | 5.5 | **1.32×** |
+| `log_miss_1kb` | **13.7** | 5.5 | 7.9 | 5.4 | 5.5 | 4.0 | **1.74×** |
 | `latency_match_end_1kb` | **13.5** | 2.4 | 7.5 | 1.7 | 3.2 | 2.0 | **1.80×** |
-| `latency_miss_1kb` | **13.3** | 4.6 | 7.9 | 4.9 | 5.6 | 3.8 | **1.67×** |
-| `prose_hit_dense_1mb` | **13.1** | 0.0 | 6.8 | 1.0 | 4.1 | 3.0 | **1.94×** |
-| `torture_miss_64kb` | **13.0** | 0.1 | 0.5 | 0.3 | 0.1 | 0.3 | **25.70×** |
-| `code_hit_brackets_256kb` | **11.1** | 0.0 | 6.0 | 1.0 | 1.3 | 0.9 | **1.86×** |
-| `multi_N8_hit_log_1mb` | **9.7** | 5.7 | – | 2.0 | 1.7 | 2.4 | **1.71×** |
-| `ru_latency_miss_1kb` | **8.6** | 3.4 | – | 4.9 | 3.8 | 3.6 | **1.75×** |
-| `multi_N512_miss_hazard_64kb` | **7.4** | 4.6 | – | 0.0 | 0.0 | 0.5 | **1.59×** |
+| `latency_miss_1kb` | **13.4** | 4.6 | 7.9 | 4.9 | 5.4 | 3.9 | **1.69×** |
+| `prose_hit_dense_1mb` | **13.1** | 0.0 | 6.8 | 1.0 | 4.2 | 2.9 | **1.93×** |
+| `torture_miss_64kb` | **13.1** | 0.1 | 0.5 | 0.3 | 0.1 | 0.3 | **25.76×** |
+| `code_hit_brackets_256kb` | **11.1** | 0.0 | 6.0 | 1.1 | 1.3 | 0.9 | **1.86×** |
+| `multi_N8_hit_log_1mb` | **10.2** | 5.7 | – | 2.0 | 1.8 | 2.5 | **1.78×** |
+| `multi_N512_miss_hazard_64kb` | **9.8** | 4.6 | – | 0.0 | 0.0 | 0.5 | **2.14×** |
+| `ru_latency_miss_1kb` | **8.5** | 3.6 | – | 5.1 | 3.9 | 3.6 | **1.65×** |
 
-#### Ice Lake (Xeon @ 2.6 GHz) — GB/s (higher is better; **bold** = casei, the fastest on every row)
+#### Ice Lake (Xeon @ 2.6 GHz) — GB/s (higher is better; **bold** = casei, fastest on every row)
 
 | row | casei | Vectorscan | veloz | PCRE2-JIT | StringZilla | rust/regex | casei vs #2 |
 |---|---|---|---|---|---|---|---|
-| `latency_match_start_1kb` | **118.4** | 2.6 | 63.4 | 4.5 | 3.8 | 3.2 | **1.87×** |
-| `samechar_miss_64kb` | **71.7** | 39.0 | 6.9 | 23.2 | 11.0 | 0.6 | **1.84×** |
-| `code_miss_256kb` | **57.2** | 23.1 | 6.8 | 19.2 | 11.5 | 9.6 | **2.48×** |
-| `log_miss_1mb` | **57.2** | 44.8 | 6.9 | 21.3 | 12.4 | 9.5 | **1.28×** |
-| `prose_miss_1mb` | **57.0** | 15.7 | 6.8 | 16.4 | 12.1 | 9.5 | **3.48×** |
-| `log_miss_64kb` | **54.7** | 39.2 | 6.9 | 20.1 | 12.2 | 9.4 | **1.39×** |
-| `log_needle16_64kb` | **52.8** | 28.2 | 6.9 | 15.8 | 11.8 | 9.3 | **1.87×** |
-| `log_needle32_64kb` | **52.8** | 6.9 | 6.9 | 16.1 | 11.0 | 9.3 | **3.27×** |
-| `log_needle8_64kb` | **52.7** | 6.9 | 6.8 | 16.1 | 15.4 | 9.2 | **3.27×** |
-| `log_needle3_64kb` | **52.6** | 39.1 | 6.9 | 16.6 | 15.4 | 14.4 | **1.35×** |
-| `multi_N8_miss_ru_1mb` | **37.2** | 6.0 | – | 16.6 | 0.8 | 9.5 | **2.24×** |
-| `multi_N8_hazard_hit_1mb` | **35.5** | 7.7 | – | 3.0 | 1.0 | 30.9 | **1.15×** |
-| `multi_N64_miss_ru_64kb` | **35.3** | 5.8 | – | 15.7 | 0.1 | 0.5 | **2.25×** |
-| `periodic_miss_64kb` | **30.9** | 0.5 | 6.9 | 23.6 | 11.0 | 0.6 | **1.31×** |
-| `multi_N8_miss_log_1mb` | **30.9** | 7.0 | – | 13.4 | 1.6 | 9.5 | **2.31×** |
-| `multi_N512_miss_log_64kb` | **29.5** | 6.9 | – | 13.9 | 0.0 | 0.5 | **2.13×** |
-| `multi_N64_miss_log_64kb` | **29.5** | 6.9 | – | 19.3 | 0.2 | 0.5 | **1.53×** |
-| `log_hit_sparse_1mb` | **27.6** | 1.5 | 6.7 | 6.9 | 10.3 | 6.8 | **2.69×** |
-| `ru_miss_1mb` | **21.7** | 17.1 | – | 16.8 | 6.4 | 9.4 | **1.27×** |
-| `kelvin_hazard_1mb` | **20.9** | 1.9 | – | 1.1 | 12.2 | 8.9 | **1.71×** |
-| `multi_N8_miss_hazard_1mb` | **18.5** | 7.7 | – | 0.3 | 0.9 | 3.2 | **2.40×** |
-| `latency_match_mid_1kb` | **18.5** | 2.1 | 12.0 | 2.3 | 3.2 | 2.4 | **1.54×** |
-| `ru_hit_sparse_1mb` | **18.3** | 0.9 | – | 15.8 | 6.3 | 8.8 | **1.16×** |
-| `multi_N2_miss_log_1mb` | **15.1** | 11.5 | – | 0.7 | 5.9 | 5.7 | **1.32×** |
-| `log_miss_1kb` | **13.4** | 4.6 | 6.6 | 4.6 | 4.8 | 3.6 | **2.04×** |
-| `latency_miss_1kb` | **12.7** | 3.9 | 6.6 | 4.2 | 4.8 | 3.6 | **1.94×** |
-| `prose_hit_dense_1mb` | **12.2** | 0.0 | 5.9 | 1.0 | 3.7 | 2.9 | **2.07×** |
-| `latency_match_end_1kb` | **11.0** | 2.1 | 6.3 | 1.5 | 2.9 | 2.0 | **1.76×** |
-| `torture_miss_64kb` | **10.2** | 0.1 | 0.4 | 0.2 | 0.1 | 0.3 | **25.30×** |
-| `multi_N8_hit_log_1mb` | **10.0** | 5.8 | – | 2.0 | 1.7 | 2.8 | **1.73×** |
-| `code_hit_brackets_256kb` | **9.1** | 0.0 | 5.0 | 1.0 | 1.1 | 0.8 | **1.81×** |
-| `ru_latency_miss_1kb` | **7.9** | 3.1 | – | 4.3 | 3.5 | 3.4 | **1.85×** |
-| `multi_N512_miss_hazard_64kb` | **7.7** | 3.8 | – | 0.0 | 0.0 | 0.5 | **2.03×** |
+| `latency_match_start_1kb` | **118.2** | 2.5 | 63.6 | 4.2 | 3.7 | 3.1 | **1.86×** |
+| `samechar_miss_64kb` | **71.7** | 39.0 | 6.9 | 22.7 | 11.0 | 0.6 | **1.84×** |
+| `prose_miss_1mb` | **57.2** | 16.7 | 6.8 | 16.4 | 12.2 | 9.5 | **3.43×** |
+| `log_miss_1mb` | **57.1** | 45.0 | 6.8 | 21.8 | 12.2 | 9.4 | **1.27×** |
+| `code_miss_256kb` | **56.9** | 23.1 | 6.9 | 19.1 | 11.5 | 9.6 | **2.47×** |
+| `log_miss_64kb` | **54.5** | 38.9 | 6.8 | 19.8 | 11.9 | 9.3 | **1.40×** |
+| `log_needle32_64kb` | **52.8** | 6.9 | 6.9 | 16.0 | 11.0 | 9.4 | **3.31×** |
+| `log_needle8_64kb` | **52.8** | 6.9 | 6.9 | 16.1 | 15.5 | 9.2 | **3.28×** |
+| `log_needle16_64kb` | **52.8** | 28.2 | 6.9 | 15.8 | 11.7 | 9.3 | **1.87×** |
+| `log_needle3_64kb` | **52.6** | 38.9 | 6.9 | 16.5 | 15.3 | 14.3 | **1.35×** |
+| `multi_N8_miss_ru_1mb` | **37.0** | 6.1 | – | 16.5 | 0.8 | 9.5 | **2.24×** |
+| `multi_N8_hazard_hit_1mb` | **35.4** | 7.7 | – | 3.0 | 1.0 | 33.0 | **1.07×** |
+| `multi_N64_miss_ru_64kb` | **35.2** | 5.8 | – | 15.7 | 0.1 | 0.5 | **2.24×** |
+| `multi_N8_miss_log_1mb` | **31.1** | 7.0 | – | 13.3 | 1.6 | 9.5 | **2.33×** |
+| `periodic_miss_64kb` | **30.9** | 0.5 | 6.9 | 23.5 | 11.0 | 0.6 | **1.32×** |
+| `multi_N64_miss_log_64kb` | **29.5** | 6.9 | – | 20.4 | 0.2 | 0.5 | **1.45×** |
+| `multi_N512_miss_log_64kb` | **29.5** | 6.9 | – | 13.8 | 0.0 | 0.5 | **2.13×** |
+| `log_hit_sparse_1mb` | **27.6** | 1.5 | 6.7 | 6.9 | 10.3 | 6.8 | **2.67×** |
+| `ru_miss_1mb` | **21.7** | 17.4 | – | 16.4 | 6.4 | 9.6 | **1.25×** |
+| `kelvin_hazard_1mb` | **21.0** | 1.9 | – | 1.1 | 12.3 | 8.9 | **1.70×** |
+| `multi_N8_miss_hazard_1mb` | **18.5** | 7.5 | – | 0.3 | 0.9 | 3.1 | **2.46×** |
+| `latency_match_mid_1kb` | **18.5** | 2.0 | 12.0 | 2.3 | 3.2 | 2.4 | **1.54×** |
+| `ru_hit_sparse_1mb` | **18.3** | 0.9 | – | 16.0 | 6.2 | 8.8 | **1.15×** |
+| `multi_N2_miss_log_1mb` | **15.0** | 11.6 | – | 0.7 | 5.9 | 5.8 | **1.29×** |
+| `log_miss_1kb` | **13.3** | 4.4 | 6.6 | 4.6 | 4.8 | 3.6 | **2.03×** |
+| `latency_miss_1kb` | **12.8** | 3.8 | 6.6 | 4.2 | 4.7 | 3.6 | **1.95×** |
+| `prose_hit_dense_1mb` | **12.0** | 0.0 | 5.8 | 1.0 | 3.6 | 2.8 | **2.06×** |
+| `latency_match_end_1kb` | **11.0** | 2.0 | 6.2 | 1.6 | 2.9 | 2.0 | **1.79×** |
+| `torture_miss_64kb` | **10.2** | 0.1 | 0.4 | 0.2 | 0.1 | 0.3 | **25.51×** |
+| `multi_N8_hit_log_1mb` | **10.1** | 5.9 | – | 1.9 | 1.7 | 2.8 | **1.71×** |
+| `multi_N512_miss_hazard_64kb` | **9.8** | 3.9 | – | 0.0 | 0.0 | 0.5 | **2.53×** |
+| `code_hit_brackets_256kb` | **9.1** | 0.0 | 5.0 | 1.0 | 1.1 | 0.7 | **1.82×** |
+| `ru_latency_miss_1kb` | **8.0** | 3.1 | – | 4.6 | 3.5 | 3.4 | **1.74×** |
 
 Diagnostic baselines (`ToLower`+`Index`, the Go Aho-Corasick port, and the exact-match `ceiling`) are omitted from the “fastest” comparison — see [Is the benchmark fair?](#is-the-benchmark-fair). Reproduce all of it with `./scripts/reproduce.sh`.
 </details>
