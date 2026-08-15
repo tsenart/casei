@@ -35,8 +35,12 @@ func NewMatcher(patterns []string) *Matcher {
 	return &Matcher{patterns: p, plan: newSearchPlan(p)}
 }
 
-// Patterns returns the pattern set (read-only view for tests and tooling).
-func (m *Matcher) Patterns() []string { return m.patterns }
+// Patterns returns a copy of the pattern set.
+func (m *Matcher) Patterns() []string {
+	patterns := make([]string, len(m.patterns))
+	copy(patterns, m.patterns)
+	return patterns
+}
 
 // Find returns the leftmost match across the pattern set, or ok=false when
 // no pattern occurs.
