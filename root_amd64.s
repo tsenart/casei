@@ -2239,10 +2239,12 @@ asciipairshorttail64:
 	VPCMPEQB Z2, Z5, K1, K3
 	KANDQ K2, K3, K2
 	KTESTQ K2, K2
-	JNE asciipairshortstop64
+	JNE asciipairshorttailstop64
 	ADDQ $64, BX
 	SUBQ $64, DX
 	JMP asciipairshorttail64
+asciipairshorttailstop64:
+	KMOVQ K2, CX
 asciipairshortstop64:
 	BSFQ CX, CX
 	ADDQ CX, BX
