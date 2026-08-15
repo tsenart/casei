@@ -23,8 +23,8 @@ import (
 
 // timeOp returns ns/op for one operation. It times manually rather than
 // through testing.Benchmark, which cannot be nested inside a running
-// benchmark, and takes the best of three samples so a loaded machine inflates
-// every entrant equally rather than randomly.
+// benchmark, and takes the best of three samples to reduce sensitivity to
+// transient host load.
 func timeOp(op func()) float64 {
 	const budget = 25 * time.Millisecond
 	best := 0.0
@@ -132,16 +132,16 @@ func BenchmarkBar(b *testing.B) {
 	for _, s := range scenarios {
 		s := s
 		b.Run("single/"+s.name, func(b *testing.B) {
-			cand := timeOp(func() { sink = casei.IndexFold(s.haystack, s.needle) })
+			cand := timeOp(func() { sink = runSingleScenario(casei.IndexFold, s) })
 
-			best := timeOp(func() { sink = indexRegexp(s.haystack, s.needle) })
+			best := timeOp(func() { sink = runSingleScenario(indexRegexp, s) })
 			competitors := 1
-			if v := timeOp(func() { sink = indexPCRE2(s.haystack, s.needle) }); v < best {
+			if v := timeOp(func() { sink = runSingleScenario(indexPCRE2, s) }); v < best {
 				best = v
 			}
 			competitors++
 			rure := rureSingles[s.needle]
-			rureTime := timeOp(func() { sink = indexRure(s.haystack, s.needle) })
+			rureTime := timeOp(func() { sink = runSingleScenario(indexRure, s) })
 			// The Rust adapter records the backend reached by this exact query.
 			// A query that did not reach memchr AVX2 is diagnostic only; it must
 			// not race a target-width field entrant under a CPU-flag label.
@@ -151,24 +151,24 @@ func BenchmarkBar(b *testing.B) {
 				}
 				competitors++
 			}
-			if v := timeOp(func() { sink = indexVectorscan(s.haystack, s.needle) }); v < best {
+			if v := timeOp(func() { sink = runSingleScenario(indexVectorscan, s) }); v < best {
 				best = v
 			}
 			competitors++
 			if stringZillaAvailable {
-				if v := timeOp(func() { sink = indexStringZilla(s.haystack, s.needle) }); v < best {
+				if v := timeOp(func() { sink = runSingleScenario(indexStringZilla, s) }); v < best {
 					best = v
 				}
 				competitors++
 			}
 			if !s.utf8 && velozVectorBits() == 256 {
-				if v := timeOp(func() { sink = veloz.IndexFold(s.haystack, s.needle) }); v < best {
+				if v := timeOp(func() { sink = runSingleScenario(veloz.IndexFold, s) }); v < best {
 					best = v
 				}
 				competitors++
 			}
-			for i := 0; i < b.N; i++ {
-				sink = casei.IndexFold(s.haystack, s.needle)
+			for b.Loop() {
+				sink = runSingleScenario(casei.IndexFold, s)
 			}
 			b.ReportMetric(cand/best, "x_vs_best")
 			b.ReportMetric(float64(competitors), "competitors")
@@ -230,7 +230,7 @@ func BenchmarkBar(b *testing.B) {
 				_ = timeOp(func() { _, matcherFound = acFirst(&goAC, s.haystack) })
 				supplemental++
 			}
-			for i := 0; i < b.N; i++ {
+			for b.Loop() {
 				_, matcherFound = m.Find(s.haystack)
 			}
 			b.ReportMetric(cand/best, "x_vs_best")
