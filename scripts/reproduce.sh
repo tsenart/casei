@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 # Reproduce casei's benchmark: build the entire competitor field from source,
-# then run the scoreboard. This is what CI runs on every push.
+# then run the scoreboard. CI builds and correctness-checks the same pinned
+# field on every push; the performance board requires the host contract below.
 #
-# Requirements: x86-64 Linux with AVX-512 (Intel Ice Lake or newer). casei's
-# benchmarked result is the AVX-512 path. It also has AVX2 and portable scalar
-# paths, but they are not benchmarked, and the native x86 field only builds on
-# x86-64 — so the script refuses elsewhere rather than print an off-scope number.
+# Requirements: x86-64 Linux with AVX-512 VBMI (Intel Ice Lake or newer).
+# casei's benchmarked result is the AVX-512 path, and VBMI is required so
+# Vectorscan can enter at full strength. casei also has AVX2 and portable
+# scalar paths, but they are not benchmarked, and the native x86 field only
+# builds on x86-64 — so the script refuses elsewhere rather than print an
+# off-scope number.
 set -euo pipefail
 
 arch="$(uname -m)"
@@ -20,8 +23,9 @@ if ! grep -qw avx512f /proc/cpuinfo 2>/dev/null; then
   exit 1
 fi
 if ! grep -qw avx512vbmi /proc/cpuinfo 2>/dev/null; then
-  echo "note: this host lacks AVX-512 VBMI, so Vectorscan will not dispatch its strongest path." >&2
-  echo "      the result still holds, but the headline is the equal-width VBMI comparison (Ice Lake / Sapphire Rapids)." >&2
+  echo "This host has no AVX-512 VBMI, so Vectorscan cannot dispatch its strongest path." >&2
+  echo "Use Intel Ice Lake or newer (for example, pin a GCP n2 to Ice Lake or use c3)." >&2
+  exit 1
 fi
 
 echo "==> Installing build dependencies (cargo, cmake, boost, pkg-config)"

@@ -3,7 +3,8 @@
 **The fastest correct case-insensitive UTF-8 substring search on x86-64 —
 faster than every specialist engine, on every row of an open, reproducible
 benchmark.** `casei.IndexFold` finds one needle; `casei.Matcher` finds many,
-both under Unicode simple case folding (the semantics of `regexp` `(?i)`).
+both under Unicode simple case folding (the semantics of `regexp` `(?i)` on
+valid UTF-8; invalid bytes are opaque).
 
 It was not written by hand. It was produced by
 [Perfloop](https://app.perfloop.ai) — a performance-proving loop, aimed by an
@@ -27,7 +28,7 @@ go get github.com/tsenart/casei
 ```
 
 ```go
-// One needle. The correct, allocation-free replacement for
+// One needle. The correct, cache-hit allocation-free replacement for
 // strings.Contains(strings.ToLower(haystack), strings.ToLower(needle)).
 if casei.ContainsFold(line, "payment declined") {
     alert(line)
@@ -45,13 +46,14 @@ if match, ok := m.Find(line); ok {
 ```
 
 `NewMatcher` compiles the pattern set once; reuse the `*Matcher` across
-searches, and share it freely — `Find` is safe for concurrent use. Both entry
-points allocate nothing per search.
+searches, and share it freely — `Find` is safe for concurrent use. `Find` and
+cache-hit `IndexFold` calls allocate nothing; compiling a new plan can allocate.
 
-Matching is Unicode **simple** case folding, identical to Go's `regexp` with
-`(?i)`: `k` matches the Kelvin sign U+212A, `ſ` matches `s`, `σ`/`ς`/`Σ` all
-match, and `ß` matches `ẞ` but never `ss`. That is not what lowercasing both
-sides gives you — see [Semantics](#what-it-is).
+On valid UTF-8, matching is Unicode **simple** case folding, identical to Go's
+`regexp` with `(?i)`: `k` matches the Kelvin sign U+212A, `ſ` matches `s`,
+`σ`/`ς`/`Σ` all match, and `ß` matches `ẞ` but never `ss`. Invalid bytes are
+matched as opaque one-byte units. That is not what lowercasing both sides gives
+you — see [Semantics](#what-it-is).
 
 Requires Go 1.22+. The AVX-512 and AVX2 paths are chosen at runtime on x86-64;
 every other platform runs the portable path, which returns identical results
@@ -60,11 +62,15 @@ every other platform runs the portable path, which returns identical results
 ## Results
 
 `casei` versus the full field — **every competitor built from source at full
-strength, each dispatching its widest path**, on the two Intel microarchitectures
-that expose the required AVX-512, independently reproduced on bare-metal cloud
-hosts.
+strength, each dispatching its widest eligible path** — in Perfloop's
+randomized co-measurements on GCP KVM hosts exposing Ice Lake and Sapphire
+Rapids.
 
-**casei is the fastest on every one of 33 rows, on both microarchitectures** — median **1.9×** (Ice Lake) to **1.7×** (Sapphire Rapids) faster than the next-fastest engine, from 1.10× on the tightest streaming row to 25.8× on the adversarial one. Throughput in GB/s, **bold = casei**; `casei vs #2` is casei over the fastest other engine on that row.
+Perfloop's sealed runs put **casei first on every one of 33 rows, on both
+microarchitectures** — median **1.9×** (Ice Lake) to **1.7×** (Sapphire Rapids)
+faster than the next-fastest engine, from 1.10× on the tightest streaming row
+to 25.8× on the adversarial one. Throughput in GB/s, **bold = casei**; `casei vs
+#2` is casei over the fastest other engine on that row.
 
 | row | casei | Vectorscan | veloz | PCRE2-JIT | StringZilla | rust/regex | casei vs #2 |
 |---|---|---|---|---|---|---|---|
@@ -159,7 +165,7 @@ hosts.
 | `code_hit_brackets_256kb` | **9.1** | 0.0 | 5.0 | 1.0 | 1.1 | 0.7 | **1.82×** |
 | `ru_latency_miss_1kb` | **8.0** | 3.1 | – | 4.6 | 3.5 | 3.4 | **1.74×** |
 
-Diagnostic baselines (`ToLower`+`Index`, the Go Aho-Corasick port, and the exact-match `ceiling`) are omitted from the “fastest” comparison — see [Is the benchmark fair?](#is-the-benchmark-fair). Reproduce all of it with `./scripts/reproduce.sh`.
+Diagnostic baselines (`ToLower`+`Index`, the Go Aho-Corasick port, and the exact-match `ceiling`) are omitted from the “fastest” comparison — see [Is the benchmark fair?](#is-the-benchmark-fair). Rebuild the field and rerun the local board with `./scripts/reproduce.sh`.
 </details>
 
 - **Every one of the 33 rows is faster than the entire field** — ASCII and
@@ -175,15 +181,19 @@ Diagnostic baselines (`ToLower`+`Index`, the Go Aho-Corasick port, and the exact
   — a real ISA advantage, not a handicap. The per-engine widths are in the table
   so you can separate that from the equal-width Vectorscan result.
 
-Correctness is pinned to Go `regexp` `(?i)` by differential and fuzz on **every**
-backend (AVX-512, AVX2, scalar): a 350k-case multi-pattern differential, a
-2.8M-case single-pattern differential, and `FuzzIndexFold` / `FuzzMatcher`.
+On valid UTF-8, correctness is pinned to Go `regexp` `(?i)` by differential and
+fuzz on **every** backend (AVX-512, AVX2, scalar): a 350k-case multi-pattern
+differential, a 2.8M-case single-pattern differential, and `FuzzIndexFold` /
+`FuzzMatcher`. Invalid-byte inputs are checked against the separate opaque-unit
+contract.
 
 ## Reproduce it
 
-On an x86-64 Linux host **with AVX-512** (a GCP `n2`/`c3`, or a recent Intel
-box — **not** Apple Silicon), one script builds the entire competitor field from
-source and runs the scoreboard. This is exactly what CI runs on every push.
+On an x86-64 Linux host **with AVX-512 VBMI** (pin a GCP `n2` to Ice Lake, use
+`c3` for Sapphire Rapids, or use equivalent recent Intel hardware — **not**
+Apple Silicon), one script builds the entire competitor field from source and
+runs the scoreboard. CI rebuilds and correctness-checks the same pinned field
+on every push; the performance board requires this stronger host contract.
 
 ```sh
 git clone https://github.com/tsenart/casei && cd casei
@@ -191,9 +201,10 @@ git clone https://github.com/tsenart/casei && cd casei
                                 # rust-regex, stringzilla, then runs the benchmark
 ```
 
-It prints, for all 33 rows, every entrant's throughput and the vector width it
-dispatched, plus `x_vs_best` (`casei`'s time ÷ the fastest *correct* competitor)
-and raw paired samples.
+It prints, for all 33 rows, every entrant's local throughput and the vector
+width it dispatched, plus `x_vs_best` (`casei`'s time ÷ the fastest *correct*
+competitor). It reruns the open local board; Perfloop's sealed case contains the
+separate randomized co-measurements behind the published tables.
 
 ## What it is
 
@@ -219,11 +230,11 @@ They are the same problem: a pattern position is a small set of UTF-8 encodings
 (its fold orbit), exact search is the singleton case, and multi-needle is the
 union. `casei` is one adaptive engine over that object.
 
-**Semantics** are Unicode **simple** case folding — exactly Go `regexp` `(?i)`,
-pinned by differential test: `k` matches `K` and the Kelvin sign U+212A; `s`
-matches long-s U+017F; `σ`/`ς`/`Σ` all match; `ß` matches `ẞ` but **not** `ss`.
-Matches start at rune boundaries and a match window's byte length can differ from
-the needle's. Bytes outside valid UTF-8 are opaque units. See
+**Semantics** are Unicode **simple** case folding — exactly Go `regexp` `(?i)`
+on valid UTF-8, pinned by differential test: `k` matches `K` and the Kelvin sign
+U+212A; `s` matches long-s U+017F; `σ`/`ς`/`Σ` all match; `ß` matches `ẞ` but
+**not** `ss`. Matches start at rune boundaries and a match window's byte length
+can differ from the needle's. Bytes outside valid UTF-8 are opaque units. See
 [`casei_test.go`](casei_test.go) for the executable definition.
 
 ## Is the benchmark fair?
@@ -243,8 +254,10 @@ This is the first thing to check, so the arena is built to answer it:
 - **Adversarial rows are included** (`periodic`, `samechar`, `torture`) so
   throughput can't be bought with a quadratic cliff.
 - **It's the real thing, reproducibly.** The field is nine engines pinned to
-  source versions and build flags in [`arena/field.yaml`](arena/field.yaml);
-  ratios come from raw paired, order-alternated samples with confidence bounds.
+  source versions and build flags in [`arena/field.yaml`](arena/field.yaml).
+  Published ratios come from Perfloop's raw co-measured samples with randomized
+  entrant order and confidence bounds; `reproduce.sh` separately rebuilds that
+  field and reruns the local `BenchmarkBar` board.
 
 The honest asterisk: the arena was developed alongside `casei`, so it is not a
 neutral third-party harness. That is exactly why it is open and reproducible, and
@@ -272,7 +285,7 @@ why the competitors are the field's real specialists at full strength.
 operator-directed mode: an operator aimed the loop — submitting each hypothesis,
 steering candidates with reviews, auditing the competitor field and the host
 ISA — and Perfloop did the proving: it generated every candidate, measured each
-against the pinned field under paired sampling, verified the winner
+against the pinned field with randomized-order co-measurement, verified the winner
 independently, and sealed the receipts. No claim here rests on the operator's
 judgment; every one rests on a sealed measurement.
 

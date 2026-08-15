@@ -1,5 +1,5 @@
 // Package casei searches UTF-8 text case-insensitively under Unicode simple
-// case folding, allocation-free.
+// case folding, with allocation-free searches after plan compilation.
 //
 // It answers two shapes of the same question. IndexFold finds one needle;
 // Matcher finds any of a pattern set and reports the leftmost match. Both run
@@ -24,13 +24,13 @@
 // Semantics — Unicode simple case folding over UTF-8:
 //
 //   - Two code points match when they belong to the same simple case-folding
-//     orbit (unicode.SimpleFold). This is exactly the matching used by Go's
-//     regexp with (?i) and by rust/regex: 'k' matches 'K' and the Kelvin
-//     sign U+212A; 's' matches 'S' and long s U+017F; σ, ς and Σ all match;
-//     ß matches ẞ (U+1E9E) but NOT "ss" (no full folding); İ (U+0130) and
-//     ı (U+0131) fold only to themselves (locale-independent).
+//     orbit (unicode.SimpleFold). On valid UTF-8, this is exactly the matching
+//     used by Go's regexp with (?i): 'k' matches 'K' and the Kelvin sign
+//     U+212A; 's' matches 'S' and long s U+017F; σ, ς and Σ all match; ß
+//     matches ẞ (U+1E9E) but NOT "ss" (no full folding); İ (U+0130) and ı
+//     (U+0131) fold only to themselves (locale-independent).
 //   - Matching is per code point, so a match window's byte length can differ
-//     from the needle's ("kelvin" is 6 bytes but matches a 8-byte window
+//     from the needle's ("kelvin" is 6 bytes but matches an 8-byte window
 //     starting with U+212A). IndexFold returns the byte offset of the first
 //     match start; match starts are haystack rune boundaries.
 //   - Bytes that are not part of a valid UTF-8 encoding are opaque units:
@@ -55,7 +55,8 @@ func IndexFold(haystack, needle string) int {
 
 // ContainsFold reports whether needle occurs in haystack under Unicode simple
 // case folding. It is IndexFold(haystack, needle) >= 0, and exists because it
-// is the shape most callers want: the correct, allocation-free replacement for
+// is the shape most callers want: the correct, cache-hit allocation-free
+// replacement for
 // strings.Contains(strings.ToLower(haystack), strings.ToLower(needle)).
 func ContainsFold(haystack, needle string) bool {
 	return IndexFold(haystack, needle) >= 0
