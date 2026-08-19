@@ -352,3 +352,31 @@ func FuzzIndexFold(f *testing.F) {
 		}
 	})
 }
+
+func TestContainsFold(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		haystack, needle string
+		want             bool
+	}{
+		{"ascii", "Payment Declined by issuer", "payment declined", true},
+		{"kelvin sign folds to k", "temperature 273\u212A today", "273k", true},
+		{"long s folds to s", "\u017Fecret", "secret", true},
+		{"final sigma orbit", "\u039F\u0394\u039F\u03A3", "odo\u03C2", false},
+		{"greek folds", "\u03A3\u03BF\u03C6\u03AF\u03B1", "\u03C3\u03BF\u03C6\u03AF\u03B1", true},
+		{"no full folding", "stra\u00DFe", "strasse", false},
+		{"sharp s orbit", "stra\u00DFe", "STRA\u1E9EE", true},
+		{"absent", "nothing here", "absent", false},
+		{"empty needle", "anything", "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := ContainsFold(tc.haystack, tc.needle)
+			if got != tc.want {
+				t.Errorf("ContainsFold(%q, %q) = %v, want %v", tc.haystack, tc.needle, got, tc.want)
+			}
+			if want := IndexFold(tc.haystack, tc.needle) >= 0; got != want {
+				t.Errorf("ContainsFold(%q, %q) = %v, disagrees with IndexFold >= 0 (%v)", tc.haystack, tc.needle, got, want)
+			}
+		})
+	}
+}

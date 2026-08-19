@@ -8,6 +8,7 @@ package arena_test
 
 import (
 	"fmt"
+	"math/rand/v2"
 	"testing"
 	"time"
 
@@ -21,23 +22,37 @@ import (
 	vectorscan "github.com/tsenart/casei/arena/vectorscan"
 )
 
-// timeOp returns ns/op for one operation. It times manually rather than
-// through testing.Benchmark, which cannot be nested inside a running
-// benchmark, and takes the best of three samples so a loaded machine inflates
-// every entrant equally rather than randomly.
-func timeOp(op func()) float64 {
+// timeSample returns ns/op for one operation. It times manually rather
+// than through testing.Benchmark, which cannot be nested inside a running
+// benchmark.
+func timeSample(op func()) float64 {
 	const budget = 25 * time.Millisecond
-	best := 0.0
+	n := 0
+	start := time.Now()
+	for time.Since(start) < budget {
+		op()
+		n++
+	}
+	return float64(time.Since(start).Nanoseconds()) / float64(n)
+}
+
+// timeOps measures every entrant three times. Each round shuffles the entrants
+// before sampling them so neither the candidate nor a field implementation
+// systematically inherits a warmer cache, branch history, or frequency state.
+func timeOps(ops ...func()) []float64 {
+	best := make([]float64, len(ops))
+	order := make([]int, len(ops))
+	for i := range order {
+		order[i] = i
+	}
+	seed := uint64(time.Now().UnixNano())
+	rng := rand.New(rand.NewPCG(seed, seed^0x9e3779b97f4a7c15))
 	for sample := 0; sample < 3; sample++ {
-		n := 0
-		start := time.Now()
-		for time.Since(start) < budget {
-			op()
-			n++
-		}
-		ns := float64(time.Since(start).Nanoseconds()) / float64(n)
-		if best == 0 || ns < best {
-			best = ns
+		rng.Shuffle(len(order), func(i, j int) { order[i], order[j] = order[j], order[i] })
+		for _, i := range order {
+			if ns := timeSample(ops[i]); best[i] == 0 || ns < best[i] {
+				best[i] = ns
+			}
 		}
 	}
 	return best
@@ -132,43 +147,40 @@ func BenchmarkBar(b *testing.B) {
 	for _, s := range scenarios {
 		s := s
 		b.Run("single/"+s.name, func(b *testing.B) {
-			cand := timeOp(func() { sink = casei.IndexFold(s.haystack, s.needle) })
-
-			best := timeOp(func() { sink = indexRegexp(s.haystack, s.needle) })
-			competitors := 1
-			if v := timeOp(func() { sink = indexPCRE2(s.haystack, s.needle) }); v < best {
-				best = v
-			}
-			competitors++
 			rure := rureSingles[s.needle]
-			rureTime := timeOp(func() { sink = indexRure(s.haystack, s.needle) })
-			// The Rust adapter records the backend reached by this exact query.
-			// A query that did not reach memchr AVX2 is diagnostic only; it must
-			// not race a target-width field entrant under a CPU-flag label.
-			if rure.VectorBits() == 256 {
-				if rureTime < best {
-					best = rureTime
-				}
-				competitors++
+			ops := []func(){
+				func() { sink = runSingleScenario(casei.IndexFold, s) },
+				func() { sink = runSingleScenario(indexRegexp, s) },
+				func() { sink = runSingleScenario(indexPCRE2, s) },
+				func() { sink = runSingleScenario(indexRure, s) },
+				func() { sink = runSingleScenario(indexVectorscan, s) },
 			}
-			if v := timeOp(func() { sink = indexVectorscan(s.haystack, s.needle) }); v < best {
-				best = v
-			}
-			competitors++
+			// A scalar/SSE Rust adapter remains diagnostic only; it cannot establish
+			// the target-width field ceiling merely because this host has AVX2.
+			eligible := []bool{false, true, true, rure.VectorBits() == 256, true}
 			if stringZillaAvailable {
-				if v := timeOp(func() { sink = indexStringZilla(s.haystack, s.needle) }); v < best {
-					best = v
-				}
-				competitors++
+				ops = append(ops, func() { sink = runSingleScenario(indexStringZilla, s) })
+				eligible = append(eligible, true)
 			}
 			if !s.utf8 && velozVectorBits() == 256 {
-				if v := timeOp(func() { sink = veloz.IndexFold(s.haystack, s.needle) }); v < best {
-					best = v
+				ops = append(ops, func() { sink = runSingleScenario(veloz.IndexFold, s) })
+				eligible = append(eligible, true)
+			}
+			times := timeOps(ops...)
+			cand := times[0]
+			best := 0.0
+			competitors := 0
+			for i := 1; i < len(times); i++ {
+				if !eligible[i] {
+					continue
+				}
+				if best == 0 || times[i] < best {
+					best = times[i]
 				}
 				competitors++
 			}
-			for i := 0; i < b.N; i++ {
-				sink = casei.IndexFold(s.haystack, s.needle)
+			for b.Loop() {
+				sink = runSingleScenario(casei.IndexFold, s)
 			}
 			b.ReportMetric(cand/best, "x_vs_best")
 			b.ReportMetric(float64(competitors), "competitors")
@@ -182,55 +194,49 @@ func BenchmarkBar(b *testing.B) {
 		scenarioIndex := scenarioIndex
 		b.Run("multi/"+s.name, func(b *testing.B) {
 			m := casei.NewMatcher(s.patterns)
-			cand := timeOp(func() { _, matcherFound = m.Find(s.haystack) })
-
 			re := regexpAltFor(s.patterns)
-			best := timeOp(func() { matcherSink = len(re.FindStringIndex(s.haystack)) })
-			competitors := 1
 			pcre := pcre2Alts[scenarioIndex]
-			if v := timeOp(func() { _, _, matcherFound = pcre.Find(s.haystack) }); v < best {
-				best = v
-			}
-			competitors++
 			rure := rureAlts[scenarioIndex]
-			rureTime := timeOp(func() { _, _, matcherFound = rure.Find(s.haystack) })
-			if rure.VectorBits() == 256 {
-				if rureTime < best {
-					best = rureTime
-				}
-				competitors++
-			}
 			vscan := vectorscanAlts[scenarioIndex]
-			if v := timeOp(func() { _, _, matcherFound = vscan.Find(s.haystack) }); v < best {
-				best = v
+			ops := []func(){
+				func() { _, matcherFound = m.Find(s.haystack) },
+				func() { matcherSink = len(re.FindStringIndex(s.haystack)) },
+				func() { _, _, matcherFound = pcre.Find(s.haystack) },
+				func() { _, _, matcherFound = rure.Find(s.haystack) },
+				func() { _, _, matcherFound = vscan.Find(s.haystack) },
 			}
-			competitors++
+			eligible := []bool{false, true, true, rure.VectorBits() == 256, true}
 			if stringZillaAvailable {
 				stringzilla := stringZillaAlts[scenarioIndex]
-				if v := timeOp(func() { _, _, matcherFound = stringzilla.Find(s.haystack) }); v < best {
-					best = v
-				}
-				competitors++
+				ops = append(ops, func() { _, _, matcherFound = stringzilla.Find(s.haystack) })
+				eligible = append(eligible, true)
 			}
 			supplemental := 0
 			rust := rustACAlts[scenarioIndex]
 			if !s.utf8 {
-				rustTime := timeOp(func() { _, _, matcherFound = rust.Find(s.haystack) })
-				// The direct Rust DFA exposes the memchr backend reached by this
-				// exact prefilter query. Do not call an unobserved scalar/SSE path
-				// an AVX2 field entrant merely because this process has AVX2.
-				if rust.VectorBits() == 256 {
-					if rustTime < best {
-						best = rustTime
-					}
-					competitors++
-				}
-
+				ops = append(ops, func() { _, _, matcherFound = rust.Find(s.haystack) })
+				// The direct Rust DFA is eligible only when this query reaches its
+				// observed AVX2 prefilter path.
+				eligible = append(eligible, rust.VectorBits() == 256)
 				goAC := acBuild(s.patterns, true)
-				_ = timeOp(func() { _, matcherFound = acFirst(&goAC, s.haystack) })
+				ops = append(ops, func() { _, matcherFound = acFirst(&goAC, s.haystack) })
+				eligible = append(eligible, false)
 				supplemental++
 			}
-			for i := 0; i < b.N; i++ {
+			times := timeOps(ops...)
+			cand := times[0]
+			best := 0.0
+			competitors := 0
+			for i := 1; i < len(times); i++ {
+				if !eligible[i] {
+					continue
+				}
+				if best == 0 || times[i] < best {
+					best = times[i]
+				}
+				competitors++
+			}
+			for b.Loop() {
 				_, matcherFound = m.Find(s.haystack)
 			}
 			b.ReportMetric(cand/best, "x_vs_best")

@@ -225,7 +225,7 @@ func BenchmarkMatcher(b *testing.B) {
 		b.Run(s.name+"/candidate", func(b *testing.B) {
 			b.SetBytes(int64(len(s.haystack)))
 			b.ReportAllocs()
-			for i := 0; i < b.N; i++ {
+			for b.Loop() {
 				_, matcherFound = m.Find(s.haystack)
 			}
 		})
@@ -233,21 +233,21 @@ func BenchmarkMatcher(b *testing.B) {
 		b.Run(s.name+"/per-pattern", func(b *testing.B) {
 			b.SetBytes(int64(len(s.haystack)))
 			b.ReportAllocs()
-			for i := 0; i < b.N; i++ {
+			for b.Loop() {
 				_, matcherFound = perPatternFind(s.haystack, singles)
 			}
 		})
 		re := regexpAltFor(s.patterns)
 		b.Run(s.name+"/regexpAlt", func(b *testing.B) {
 			b.SetBytes(int64(len(s.haystack)))
-			for i := 0; i < b.N; i++ {
+			for b.Loop() {
 				matcherSink = len(re.FindStringIndex(s.haystack))
 			}
 		})
 		pcre := pcre2Alts[scenarioIndex]
 		b.Run(s.name+"/pcre2-jit", func(b *testing.B) {
 			b.SetBytes(int64(len(s.haystack)))
-			for i := 0; i < b.N; i++ {
+			for b.Loop() {
 				_, _, matcherFound = pcre.Find(s.haystack)
 			}
 		})
@@ -256,14 +256,14 @@ func BenchmarkMatcher(b *testing.B) {
 		rure := rureAlts[scenarioIndex]
 		b.Run(s.name+"/rure", func(b *testing.B) {
 			b.SetBytes(int64(len(s.haystack)))
-			for i := 0; i < b.N; i++ {
+			for b.Loop() {
 				_, _, matcherFound = rure.Find(s.haystack)
 			}
 		})
 		vectorscan := vectorscanAlts[scenarioIndex]
 		b.Run(s.name+"/vectorscan", func(b *testing.B) {
 			b.SetBytes(int64(len(s.haystack)))
-			for i := 0; i < b.N; i++ {
+			for b.Loop() {
 				_, _, matcherFound = vectorscan.Find(s.haystack)
 			}
 		})
@@ -271,7 +271,7 @@ func BenchmarkMatcher(b *testing.B) {
 			stringzilla := stringZillaAlts[scenarioIndex]
 			b.Run(s.name+"/stringzilla", func(b *testing.B) {
 				b.SetBytes(int64(len(s.haystack)))
-				for i := 0; i < b.N; i++ {
+				for b.Loop() {
 					_, _, matcherFound = stringzilla.Find(s.haystack)
 				}
 			})
@@ -280,14 +280,14 @@ func BenchmarkMatcher(b *testing.B) {
 			rust := rustACAlts[scenarioIndex]
 			b.Run(s.name+"/rustac", func(b *testing.B) {
 				b.SetBytes(int64(len(s.haystack)))
-				for i := 0; i < b.N; i++ {
+				for b.Loop() {
 					_, _, matcherFound = rust.Find(s.haystack)
 				}
 			})
 			a := acBuild(s.patterns, true)
 			b.Run(s.name+"/ac", func(b *testing.B) {
 				b.SetBytes(int64(len(s.haystack)))
-				for i := 0; i < b.N; i++ {
+				for b.Loop() {
 					_, matcherFound = acFirst(&a, s.haystack)
 				}
 			})
@@ -301,7 +301,7 @@ func BenchmarkMatcher(b *testing.B) {
 		exact := acBuild(foldAll(s.patterns, s.utf8), false)
 		b.Run(s.name+"/ceiling", func(b *testing.B) {
 			b.SetBytes(int64(len(lh)))
-			for i := 0; i < b.N; i++ {
+			for b.Loop() {
 				_, matcherFound = acFirst(&exact, lh)
 			}
 		})

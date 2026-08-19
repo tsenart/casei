@@ -56,6 +56,22 @@ substring engine — and it is absent from every caseless benchmark: no
 dedicated caseless substring engine exists in that suite at all; the
 caseless columns are contested only by general regex engines.
 
+**Direct rebar audit (2026-08-17):** `casei` was wired into every caseless
+literal or finite-alternation definition at rebar commit `463d00f`: 18
+performance workloads and three semantic checks. Rebar's pinned
+[performance models](https://github.com/BurntSushi/rebar/blob/463d00f31887e84c38467805b9e3122c314b9521/MODELS.md)
+enumerate every non-overlapping match, rather than return the first. Five rows
+enable Unicode folding and therefore share this repository's folding contract;
+against the selected current leaders, the loop-over-`Find` adapter wins two and
+loses three on both Ice Lake and Sapphire Rapids, with the five-pattern Russian
+row losing by roughly 9× to Hyperscan. Thirteen additional performance rows
+request ASCII-only case matching; they were run and output-verified, but
+`casei` retains stronger Unicode semantics. [`REBAR.md`](REBAR.md) records
+every row, both-host ratios,
+the incompatible `s`/`ſ` behavior check, and the missing iterator work. These
+measurements bound the result here to first-match search; rebar's count-all
+numbers cannot be borrowed in support of it.
+
 **Correction (v2, after a three-way prior-art sweep):** dedicated engines
 DO exist, with different contracts:
 
@@ -89,8 +105,10 @@ bandwidth. rebar's pcre2/jit posts 18.0 GB/s on Russian caseless
 (different machine/corpus — same-box reproduction required before any
 comparative claim). **The open target is the cased scripts.**
 
-No dedicated engine implements **simple folding** — the semantics of
-`regexp (?i)`, rust/regex, and this arena.
+Before this repository, no dedicated engine in the surveyed field implemented
+**simple folding** — the semantics of `regexp (?i)`, rust/regex, and this
+arena. `casei` now does; [`NOVELTY.md`](NOVELTY.md) is explicit that its
+components are known art and the claimed advance is the measured result.
 
 In Go, the strongest published caseless search is
 [mhr3/veloz](https://github.com/mhr3/veloz) `ascii.IndexFold` (NEON on arm64

@@ -87,6 +87,25 @@ func TestMatcherCompilesSharedPlan(t *testing.T) {
 	}
 }
 
+func TestMatcherPatternsAreIsolated(t *testing.T) {
+	patterns := []string{"needle", "other"}
+	m := NewMatcher(patterns)
+
+	patterns[0] = "constructor input changed"
+	if got := m.Patterns()[0]; got != "needle" {
+		t.Fatalf("Patterns()[0] after constructor input mutation = %q, want %q", got, "needle")
+	}
+
+	exposed := m.Patterns()
+	exposed[0] = "returned slice changed"
+	if got := m.Patterns()[0]; got != "needle" {
+		t.Fatalf("Patterns()[0] after returned slice mutation = %q, want %q", got, "needle")
+	}
+	if got, ok := m.Find("needle"); !ok || got != (Match{Pattern: 0, Start: 0}) {
+		t.Fatalf("Find after returned slice mutation = %+v,%v, want {Pattern:0 Start:0},true", got, ok)
+	}
+}
+
 func TestMatcherConcurrentFirstFind(t *testing.T) {
 	patterns := []string{"first needle", "second needle"}
 	haystack := strings.Repeat("x", 80)

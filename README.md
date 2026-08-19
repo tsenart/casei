@@ -1,9 +1,11 @@
 # casei
 
-**The fastest correct case-insensitive UTF-8 substring search on x86-64 —
-faster than every specialist engine, on every row of an open, reproducible
-benchmark.** `casei.IndexFold` finds one needle; `casei.Matcher` finds many,
-both under Unicode simple case folding (the semantics of `regexp` `(?i)`).
+**The fastest correct case-insensitive UTF-8 first-match search on x86-64 —
+faster than every eligible specialist engine, on every row of an open,
+reproducible benchmark.** `casei.IndexFold` finds one needle;
+`casei.Matcher.Find` finds the leftmost of many, both under Unicode simple case
+folding (the semantics of `regexp` `(?i)` on valid UTF-8; invalid bytes are
+opaque).
 
 It was not written by hand. It was produced by
 [Perfloop](https://app.perfloop.ai) — a performance-proving loop, aimed by an
@@ -12,122 +14,194 @@ computing. The operator chose the targets; the loop generated, measured, and
 verified every change. Every candidate tried, every measurement, and the sealed
 proofs are public: **[the engine case ↗](https://app.perfloop.ai/t/oss/case_9r9ntnxjd1)**.
 
-> **Scope, up front.** These numbers are the **AVX-512** path (Intel Ice Lake or
-> newer). `casei` also has an **AVX2** path (x86 without AVX-512) and a **portable
-> scalar** path (other architectures — there is no NEON kernel yet); both are
-> correct but **not benchmarked here**, so the result is scoped to AVX-512 and is
-> not claimed for them. It is a *compile-once, search-many* engine: for a single
-> short lookup, `strings.Index` is faster. It implements **simple** folding, not
-> full folding (`ß` matches `ẞ`, never `ss`).
+> **The whole idea:** `casei` does not make Unicode matching cheap. It avoids
+> doing Unicode matching on almost every byte. It compiles the complete folding
+> rules once, derives raw-byte tests that reject 64 impossible starts at a time,
+> and runs the exact shared Unicode plan only at survivors. [See how and why
+> that beats the field.](HOW_IT_WORKS.md)
+
+> **Scope, up front.** These numbers are the **AVX-512F/BW/VBMI** path on the
+> measured Intel Ice Lake and Sapphire Rapids hosts. `casei` also has an
+> **AVX2** path and a **portable scalar** path (there is no NEON kernel yet);
+> both are correct but **not benchmarked here**, so the result is not claimed
+> for them. It is a *compile-once, search-many* engine: for a single short
+> lookup, `strings.Index` is faster. It implements **simple** folding, not full
+> folding (`ß` matches `ẞ`, never `ss`). The measured API returns the first
+> match; it does not enumerate every match in a haystack.
+
+## Use it
+
+```sh
+go get github.com/tsenart/casei
+```
+
+```go
+// One needle. The correct, cache-hit allocation-free replacement for
+// strings.Contains(strings.ToLower(haystack), strings.ToLower(needle)).
+if casei.ContainsFold(line, "payment declined") {
+    alert(line)
+}
+
+// Byte offset instead of a bool.
+at := casei.IndexFold(line, "payment declined") // -1 when absent
+
+// Many needles, one pass. Leftmost match wins; ties go to the lowest
+// pattern index.
+m := casei.NewMatcher([]string{"fatal panic", "oom killed", "segfault"})
+if match, ok := m.Find(line); ok {
+    fmt.Println(m.Patterns()[match.Pattern], match.Start)
+}
+```
+
+`NewMatcher` compiles the pattern set once; reuse the `*Matcher` across
+searches, and share it freely — `Find` is safe for concurrent use. `Find` and
+cache-hit `IndexFold` calls allocate nothing; compiling a new plan can allocate.
+
+On valid UTF-8, matching is Unicode **simple** case folding, identical to Go's
+`regexp` with `(?i)`: `k` matches the Kelvin sign U+212A, `ſ` matches `s`,
+`σ`/`ς`/`Σ` all match, and `ß` matches `ẞ` but never `ss`. Invalid bytes are
+matched as opaque one-byte units. That is not what lowercasing both sides gives
+you — see [Semantics](#what-it-is).
+
+Requires Go 1.22+. The AVX-512 and AVX2 paths are chosen at runtime on x86-64;
+every other platform runs the portable path, which returns identical results
+(see [Limitations](#limitations) for what that costs).
+
+## Why it is fast
+
+**Most bytes never enter the Unicode matcher.** Construction produces two
+things from the same patterns:
+
+```text
+patterns -> complete simple-fold plan -> exact answer
+        \-> conservative byte filters -> 64 starts at once -> survivors only
+```
+
+The filters use dispersed byte probes, pair/triple tables, and Shufti/Teddy-style
+bit masks. A zero mask proves that an entire block contains no possible start.
+A set bit proves nothing: that position is replayed through the complete plan,
+which alone decides Unicode equivalence, byte offsets, leftmost order, and
+pattern-ID ties. Filters may admit false positives; they cannot create a match
+or hide one.
+
+For many needles, the patterns share one fold-token state machine and one scan.
+For one needle, that same machine has `N=1`. AVX-512 then amplifies the design:
+64 candidate starts per block, mask-register set arithmetic, and VBMI table
+lookups. Hand-scheduled assembly matters too—a measured four-way Shufti
+reduction fusion made its 64 KiB kernel 21.6% faster and its contested arena row
+21.8% faster—but it is an amplifier, not the source of the algorithmic
+advantage.
+
+[The one-page explanation](HOW_IT_WORKS.md) walks from that mental model to the
+actual plan, kernels, competitor differences, causal measurements, and limits.
 
 ## Results
 
-`casei` versus the full field — **every competitor built from source at full
-strength, each dispatching its widest path**, on the two Intel microarchitectures
-that expose the required AVX-512, independently reproduced on bare-metal cloud
-hosts.
+`casei`'s first-match API versus the full eligible field — **every competitor
+built from source at full strength, each dispatching its widest eligible path**
+— in Perfloop's randomized co-measurements on GCP KVM hosts exposing Ice Lake
+and Sapphire Rapids.
 
-**casei is the fastest on every one of 33 rows, on both microarchitectures** — median **1.7×** (Sapphire Rapids) to **1.9×** (Ice Lake) faster than the next-fastest engine, from 1.1× on the tightest streaming row to 25× on the adversarial one. Throughput in GB/s, **bold = casei**; `casei vs #2` is casei over the fastest other engine on that row.
+Perfloop's sealed runs put **casei first on every one of 33 rows, on both
+microarchitectures** — median **1.9×** (Ice Lake) to **1.7×** (Sapphire Rapids)
+faster than the next-fastest engine, from 1.10× on the tightest streaming row
+to 25.8× on the adversarial one. Throughput in GB/s, **bold = casei**; `casei vs
+#2` is casei over the fastest other engine on that row.
 
-| workload | casei | Vectorscan | veloz | PCRE2-JIT | StringZilla | rust/regex | casei vs #2 |
+| row | casei | Vectorscan | veloz | PCRE2-JIT | StringZilla | rust/regex | casei vs #2 |
 |---|---|---|---|---|---|---|---|
-| `log_miss_1mb` | **56.5** | 52.1 | 8.3 | 23.4 | 11.5 | 9.0 | **1.09×** |
-| `code_miss_256kb` | **56.1** | 29.2 | 8.3 | 23.3 | 10.9 | 9.1 | **1.92×** |
-| `prose_miss_1mb` | **56.2** | 19.7 | 8.3 | 23.4 | 12.3 | 9.0 | **2.40×** |
-| `ru_miss_1mb` | **27.6** | 16.6 | – | 22.8 | 6.5 | 9.0 | **1.21×** |
-| `multi_N512_miss_log_64kb` | **27.7** | 6.8 | – | 19.3 | 0.0 | 0.5 | **1.43×** |
-| `latency_match_start_1kb` | **116.4** | 2.9 | 69.3 | 4.1 | 4.2 | 3.2 | **1.68×** |
-| `samechar_miss_64kb` | **67.9** | 44.4 | 8.3 | 22.2 | 11.0 | 0.5 | **1.53×** |
-| `periodic_miss_64kb` | **35.5** | 0.6 | 8.3 | 28.5 | 11.0 | 0.5 | **1.25×** |
-| `torture_miss_64kb` | **13.0** | 0.1 | 0.5 | 0.3 | 0.1 | 0.3 | **25.70×** |
-| `log_hit_sparse_1mb` | **32.0** | 1.5 | 8.0 | 7.3 | 10.4 | 6.5 | **3.08×** |
+| `log_miss_1mb` | **56.4** | 51.3 | 8.3 | 23.3 | 12.3 | 9.0 | **1.10×** |
+| `code_miss_256kb` | **56.1** | 29.1 | 8.3 | 23.3 | 11.5 | 9.1 | **1.93×** |
+| `prose_miss_1mb` | **56.3** | 19.5 | 8.3 | 23.2 | 12.1 | 9.0 | **2.43×** |
+| `ru_miss_1mb` | **27.5** | 16.5 | – | 22.8 | 6.5 | 9.0 | **1.21×** |
+| `multi_N512_miss_log_64kb` | **27.7** | 6.8 | – | 19.5 | 0.0 | 0.5 | **1.42×** |
+| `multi_N512_miss_hazard_64kb` | **9.8** | 4.6 | – | 0.0 | 0.0 | 0.5 | **2.14×** |
+| `latency_match_start_1kb` | **118.1** | 2.9 | 70.1 | 4.6 | 4.4 | 3.3 | **1.68×** |
+| `samechar_miss_64kb` | **67.6** | 44.7 | 8.3 | 22.3 | 11.0 | 0.5 | **1.51×** |
+| `periodic_miss_64kb` | **35.5** | 0.6 | 8.3 | 28.4 | 11.0 | 0.5 | **1.25×** |
+| `torture_miss_64kb` | **13.1** | 0.1 | 0.5 | 0.3 | 0.1 | 0.3 | **25.76×** |
+| `log_hit_sparse_1mb` | **32.1** | 1.5 | 8.0 | 7.2 | 10.3 | 6.6 | **3.11×** |
 
 <details>
 <summary><b>Full 33-row tables — Sapphire Rapids and Ice Lake, every entrant</b></summary>
 
-> Measured at the engine as merged in [#1](https://github.com/tsenart/casei/pull/1)
-> (commit `fa0dff6`). Kernel improvements merged since ([#3](https://github.com/tsenart/casei/pull/3),
-> +21.5% on the Shufti kernels) are **not yet reflected** — if you reproduce today
-> you should see casei slightly faster than these tables. A full refresh lands
-> when the current optimization pass completes.
-
-#### Sapphire Rapids (Xeon 8481C) — GB/s (higher is better; **bold** = casei, the fastest on every row)
+#### Sapphire Rapids (Xeon 8481C) — GB/s (higher is better; **bold** = casei, fastest on every row)
 
 | row | casei | Vectorscan | veloz | PCRE2-JIT | StringZilla | rust/regex | casei vs #2 |
 |---|---|---|---|---|---|---|---|
-| `latency_match_start_1kb` | **116.4** | 2.9 | 69.3 | 4.1 | 4.2 | 3.2 | **1.68×** |
-| `samechar_miss_64kb` | **67.9** | 44.4 | 8.3 | 22.2 | 11.0 | 0.5 | **1.53×** |
-| `log_miss_1mb` | **56.5** | 52.1 | 8.3 | 23.4 | 11.5 | 9.0 | **1.09×** |
-| `prose_miss_1mb` | **56.2** | 19.7 | 8.3 | 23.4 | 12.3 | 9.0 | **2.40×** |
-| `code_miss_256kb` | **56.1** | 29.2 | 8.3 | 23.3 | 10.9 | 9.1 | **1.92×** |
-| `log_miss_64kb` | **53.5** | 44.3 | 8.3 | 22.0 | 12.3 | 8.9 | **1.21×** |
-| `log_needle8_64kb` | **53.3** | 6.8 | 8.3 | 21.1 | 17.8 | 8.9 | **2.53×** |
-| `log_needle16_64kb` | **53.3** | 35.6 | 8.3 | 22.1 | 11.8 | 8.9 | **1.50×** |
-| `log_needle3_64kb` | **53.0** | 44.7 | 8.3 | 22.0 | 18.0 | 13.9 | **1.19×** |
-| `log_needle32_64kb` | **52.8** | 6.8 | 8.3 | 21.5 | 10.9 | 8.9 | **2.45×** |
-| `multi_N8_miss_ru_1mb` | **38.8** | 5.6 | – | 20.8 | 0.8 | 9.0 | **1.86×** |
-| `multi_N64_miss_ru_64kb` | **37.1** | 7.1 | – | 21.3 | 0.1 | 0.5 | **1.74×** |
-| `multi_N8_hazard_hit_1mb` | **36.6** | 6.8 | – | 2.7 | 0.9 | 31.3 | **1.17×** |
-| `periodic_miss_64kb` | **35.5** | 0.6 | 8.3 | 28.5 | 11.0 | 0.5 | **1.25×** |
-| `log_hit_sparse_1mb` | **32.0** | 1.5 | 8.0 | 7.3 | 10.4 | 6.5 | **3.08×** |
-| `multi_N8_miss_log_1mb` | **29.1** | 6.8 | – | 14.2 | 1.6 | 9.0 | **2.05×** |
-| `multi_N512_miss_log_64kb` | **27.7** | 6.8 | – | 19.3 | 0.0 | 0.5 | **1.43×** |
-| `multi_N64_miss_log_64kb` | **27.7** | 6.8 | – | 21.9 | 0.2 | 0.5 | **1.27×** |
-| `ru_miss_1mb` | **27.6** | 16.6 | – | 22.8 | 6.5 | 9.0 | **1.21×** |
-| `ru_hit_sparse_1mb` | **24.6** | 0.8 | – | 19.7 | 6.5 | 8.5 | **1.25×** |
-| `latency_match_mid_1kb` | **22.5** | 2.4 | 14.5 | 2.6 | 3.7 | 2.5 | **1.55×** |
-| `kelvin_hazard_1mb` | **20.3** | 1.8 | – | 1.1 | 12.9 | 8.6 | **1.57×** |
-| `multi_N8_miss_hazard_1mb` | **18.4** | 6.7 | – | 0.3 | 0.9 | 2.8 | **2.73×** |
-| `multi_N2_miss_log_1mb` | **15.3** | 11.6 | – | 0.7 | 5.8 | 5.5 | **1.31×** |
-| `log_miss_1kb` | **13.9** | 5.0 | 7.9 | 5.2 | 5.5 | 3.8 | **1.76×** |
+| `latency_match_start_1kb` | **118.1** | 2.9 | 70.1 | 4.6 | 4.4 | 3.3 | **1.68×** |
+| `samechar_miss_64kb` | **67.6** | 44.7 | 8.3 | 22.3 | 11.0 | 0.5 | **1.51×** |
+| `log_miss_1mb` | **56.4** | 51.3 | 8.3 | 23.3 | 12.3 | 9.0 | **1.10×** |
+| `prose_miss_1mb` | **56.3** | 19.5 | 8.3 | 23.2 | 12.1 | 9.0 | **2.43×** |
+| `code_miss_256kb` | **56.1** | 29.1 | 8.3 | 23.3 | 11.5 | 9.1 | **1.93×** |
+| `log_miss_64kb` | **53.4** | 45.2 | 8.3 | 22.3 | 12.3 | 8.9 | **1.18×** |
+| `log_needle3_64kb` | **53.3** | 45.0 | 8.3 | 22.1 | 18.0 | 13.8 | **1.19×** |
+| `log_needle32_64kb` | **53.3** | 6.8 | 8.3 | 21.0 | 11.0 | 8.9 | **2.54×** |
+| `log_needle16_64kb` | **53.3** | 36.0 | 8.3 | 22.1 | 11.8 | 8.9 | **1.48×** |
+| `log_needle8_64kb` | **53.0** | 6.8 | 8.3 | 20.9 | 18.0 | 8.9 | **2.53×** |
+| `multi_N8_miss_ru_1mb` | **38.6** | 5.7 | – | 23.3 | 0.8 | 9.0 | **1.66×** |
+| `multi_N64_miss_ru_64kb` | **37.0** | 7.2 | – | 21.8 | 0.1 | 0.5 | **1.70×** |
+| `multi_N8_hazard_hit_1mb` | **35.5** | 6.7 | – | 2.7 | 0.9 | 31.6 | **1.13×** |
+| `periodic_miss_64kb` | **35.5** | 0.6 | 8.3 | 28.4 | 11.0 | 0.5 | **1.25×** |
+| `log_hit_sparse_1mb` | **32.1** | 1.5 | 8.0 | 7.2 | 10.3 | 6.6 | **3.11×** |
+| `multi_N8_miss_log_1mb` | **29.3** | 6.8 | – | 14.3 | 1.6 | 9.0 | **2.04×** |
+| `multi_N64_miss_log_64kb` | **27.7** | 6.8 | – | 22.0 | 0.2 | 0.5 | **1.26×** |
+| `multi_N512_miss_log_64kb` | **27.7** | 6.8 | – | 19.5 | 0.0 | 0.5 | **1.42×** |
+| `ru_miss_1mb` | **27.5** | 16.5 | – | 22.8 | 6.5 | 9.0 | **1.21×** |
+| `ru_hit_sparse_1mb` | **24.5** | 0.8 | – | 19.3 | 6.5 | 8.5 | **1.27×** |
+| `latency_match_mid_1kb` | **22.7** | 2.4 | 14.5 | 2.6 | 3.8 | 2.5 | **1.57×** |
+| `kelvin_hazard_1mb` | **20.3** | 1.8 | – | 1.2 | 12.8 | 8.5 | **1.58×** |
+| `multi_N8_miss_hazard_1mb` | **18.3** | 6.8 | – | 0.3 | 0.9 | 2.8 | **2.67×** |
+| `multi_N2_miss_log_1mb` | **15.2** | 11.5 | – | 0.7 | 5.8 | 5.5 | **1.32×** |
+| `log_miss_1kb` | **13.7** | 5.5 | 7.9 | 5.4 | 5.5 | 4.0 | **1.74×** |
 | `latency_match_end_1kb` | **13.5** | 2.4 | 7.5 | 1.7 | 3.2 | 2.0 | **1.80×** |
-| `latency_miss_1kb` | **13.3** | 4.6 | 7.9 | 4.9 | 5.6 | 3.8 | **1.67×** |
-| `prose_hit_dense_1mb` | **13.1** | 0.0 | 6.8 | 1.0 | 4.1 | 3.0 | **1.94×** |
-| `torture_miss_64kb` | **13.0** | 0.1 | 0.5 | 0.3 | 0.1 | 0.3 | **25.70×** |
-| `code_hit_brackets_256kb` | **11.1** | 0.0 | 6.0 | 1.0 | 1.3 | 0.9 | **1.86×** |
-| `multi_N8_hit_log_1mb` | **9.7** | 5.7 | – | 2.0 | 1.7 | 2.4 | **1.71×** |
-| `ru_latency_miss_1kb` | **8.6** | 3.4 | – | 4.9 | 3.8 | 3.6 | **1.75×** |
-| `multi_N512_miss_hazard_64kb` | **7.4** | 4.6 | – | 0.0 | 0.0 | 0.5 | **1.59×** |
+| `latency_miss_1kb` | **13.4** | 4.6 | 7.9 | 4.9 | 5.4 | 3.9 | **1.69×** |
+| `prose_hit_dense_1mb` | **13.1** | 0.0 | 6.8 | 1.0 | 4.2 | 2.9 | **1.93×** |
+| `torture_miss_64kb` | **13.1** | 0.1 | 0.5 | 0.3 | 0.1 | 0.3 | **25.76×** |
+| `code_hit_brackets_256kb` | **11.1** | 0.0 | 6.0 | 1.1 | 1.3 | 0.9 | **1.86×** |
+| `multi_N8_hit_log_1mb` | **10.2** | 5.7 | – | 2.0 | 1.8 | 2.5 | **1.78×** |
+| `multi_N512_miss_hazard_64kb` | **9.8** | 4.6 | – | 0.0 | 0.0 | 0.5 | **2.14×** |
+| `ru_latency_miss_1kb` | **8.5** | 3.6 | – | 5.1 | 3.9 | 3.6 | **1.65×** |
 
-#### Ice Lake (Xeon @ 2.6 GHz) — GB/s (higher is better; **bold** = casei, the fastest on every row)
+#### Ice Lake (Xeon @ 2.6 GHz) — GB/s (higher is better; **bold** = casei, fastest on every row)
 
 | row | casei | Vectorscan | veloz | PCRE2-JIT | StringZilla | rust/regex | casei vs #2 |
 |---|---|---|---|---|---|---|---|
-| `latency_match_start_1kb` | **118.4** | 2.6 | 63.4 | 4.5 | 3.8 | 3.2 | **1.87×** |
-| `samechar_miss_64kb` | **71.7** | 39.0 | 6.9 | 23.2 | 11.0 | 0.6 | **1.84×** |
-| `code_miss_256kb` | **57.2** | 23.1 | 6.8 | 19.2 | 11.5 | 9.6 | **2.48×** |
-| `log_miss_1mb` | **57.2** | 44.8 | 6.9 | 21.3 | 12.4 | 9.5 | **1.28×** |
-| `prose_miss_1mb` | **57.0** | 15.7 | 6.8 | 16.4 | 12.1 | 9.5 | **3.48×** |
-| `log_miss_64kb` | **54.7** | 39.2 | 6.9 | 20.1 | 12.2 | 9.4 | **1.39×** |
-| `log_needle16_64kb` | **52.8** | 28.2 | 6.9 | 15.8 | 11.8 | 9.3 | **1.87×** |
-| `log_needle32_64kb` | **52.8** | 6.9 | 6.9 | 16.1 | 11.0 | 9.3 | **3.27×** |
-| `log_needle8_64kb` | **52.7** | 6.9 | 6.8 | 16.1 | 15.4 | 9.2 | **3.27×** |
-| `log_needle3_64kb` | **52.6** | 39.1 | 6.9 | 16.6 | 15.4 | 14.4 | **1.35×** |
-| `multi_N8_miss_ru_1mb` | **37.2** | 6.0 | – | 16.6 | 0.8 | 9.5 | **2.24×** |
-| `multi_N8_hazard_hit_1mb` | **35.5** | 7.7 | – | 3.0 | 1.0 | 30.9 | **1.15×** |
-| `multi_N64_miss_ru_64kb` | **35.3** | 5.8 | – | 15.7 | 0.1 | 0.5 | **2.25×** |
-| `periodic_miss_64kb` | **30.9** | 0.5 | 6.9 | 23.6 | 11.0 | 0.6 | **1.31×** |
-| `multi_N8_miss_log_1mb` | **30.9** | 7.0 | – | 13.4 | 1.6 | 9.5 | **2.31×** |
-| `multi_N512_miss_log_64kb` | **29.5** | 6.9 | – | 13.9 | 0.0 | 0.5 | **2.13×** |
-| `multi_N64_miss_log_64kb` | **29.5** | 6.9 | – | 19.3 | 0.2 | 0.5 | **1.53×** |
-| `log_hit_sparse_1mb` | **27.6** | 1.5 | 6.7 | 6.9 | 10.3 | 6.8 | **2.69×** |
-| `ru_miss_1mb` | **21.7** | 17.1 | – | 16.8 | 6.4 | 9.4 | **1.27×** |
-| `kelvin_hazard_1mb` | **20.9** | 1.9 | – | 1.1 | 12.2 | 8.9 | **1.71×** |
-| `multi_N8_miss_hazard_1mb` | **18.5** | 7.7 | – | 0.3 | 0.9 | 3.2 | **2.40×** |
-| `latency_match_mid_1kb` | **18.5** | 2.1 | 12.0 | 2.3 | 3.2 | 2.4 | **1.54×** |
-| `ru_hit_sparse_1mb` | **18.3** | 0.9 | – | 15.8 | 6.3 | 8.8 | **1.16×** |
-| `multi_N2_miss_log_1mb` | **15.1** | 11.5 | – | 0.7 | 5.9 | 5.7 | **1.32×** |
-| `log_miss_1kb` | **13.4** | 4.6 | 6.6 | 4.6 | 4.8 | 3.6 | **2.04×** |
-| `latency_miss_1kb` | **12.7** | 3.9 | 6.6 | 4.2 | 4.8 | 3.6 | **1.94×** |
-| `prose_hit_dense_1mb` | **12.2** | 0.0 | 5.9 | 1.0 | 3.7 | 2.9 | **2.07×** |
-| `latency_match_end_1kb` | **11.0** | 2.1 | 6.3 | 1.5 | 2.9 | 2.0 | **1.76×** |
-| `torture_miss_64kb` | **10.2** | 0.1 | 0.4 | 0.2 | 0.1 | 0.3 | **25.30×** |
-| `multi_N8_hit_log_1mb` | **10.0** | 5.8 | – | 2.0 | 1.7 | 2.8 | **1.73×** |
-| `code_hit_brackets_256kb` | **9.1** | 0.0 | 5.0 | 1.0 | 1.1 | 0.8 | **1.81×** |
-| `ru_latency_miss_1kb` | **7.9** | 3.1 | – | 4.3 | 3.5 | 3.4 | **1.85×** |
-| `multi_N512_miss_hazard_64kb` | **7.7** | 3.8 | – | 0.0 | 0.0 | 0.5 | **2.03×** |
+| `latency_match_start_1kb` | **118.2** | 2.5 | 63.6 | 4.2 | 3.7 | 3.1 | **1.86×** |
+| `samechar_miss_64kb` | **71.7** | 39.0 | 6.9 | 22.7 | 11.0 | 0.6 | **1.84×** |
+| `prose_miss_1mb` | **57.2** | 16.7 | 6.8 | 16.4 | 12.2 | 9.5 | **3.43×** |
+| `log_miss_1mb` | **57.1** | 45.0 | 6.8 | 21.8 | 12.2 | 9.4 | **1.27×** |
+| `code_miss_256kb` | **56.9** | 23.1 | 6.9 | 19.1 | 11.5 | 9.6 | **2.47×** |
+| `log_miss_64kb` | **54.5** | 38.9 | 6.8 | 19.8 | 11.9 | 9.3 | **1.40×** |
+| `log_needle32_64kb` | **52.8** | 6.9 | 6.9 | 16.0 | 11.0 | 9.4 | **3.31×** |
+| `log_needle8_64kb` | **52.8** | 6.9 | 6.9 | 16.1 | 15.5 | 9.2 | **3.28×** |
+| `log_needle16_64kb` | **52.8** | 28.2 | 6.9 | 15.8 | 11.7 | 9.3 | **1.87×** |
+| `log_needle3_64kb` | **52.6** | 38.9 | 6.9 | 16.5 | 15.3 | 14.3 | **1.35×** |
+| `multi_N8_miss_ru_1mb` | **37.0** | 6.1 | – | 16.5 | 0.8 | 9.5 | **2.24×** |
+| `multi_N8_hazard_hit_1mb` | **35.4** | 7.7 | – | 3.0 | 1.0 | 33.0 | **1.07×** |
+| `multi_N64_miss_ru_64kb` | **35.2** | 5.8 | – | 15.7 | 0.1 | 0.5 | **2.24×** |
+| `multi_N8_miss_log_1mb` | **31.1** | 7.0 | – | 13.3 | 1.6 | 9.5 | **2.33×** |
+| `periodic_miss_64kb` | **30.9** | 0.5 | 6.9 | 23.5 | 11.0 | 0.6 | **1.32×** |
+| `multi_N64_miss_log_64kb` | **29.5** | 6.9 | – | 20.4 | 0.2 | 0.5 | **1.45×** |
+| `multi_N512_miss_log_64kb` | **29.5** | 6.9 | – | 13.8 | 0.0 | 0.5 | **2.13×** |
+| `log_hit_sparse_1mb` | **27.6** | 1.5 | 6.7 | 6.9 | 10.3 | 6.8 | **2.67×** |
+| `ru_miss_1mb` | **21.7** | 17.4 | – | 16.4 | 6.4 | 9.6 | **1.25×** |
+| `kelvin_hazard_1mb` | **21.0** | 1.9 | – | 1.1 | 12.3 | 8.9 | **1.70×** |
+| `multi_N8_miss_hazard_1mb` | **18.5** | 7.5 | – | 0.3 | 0.9 | 3.1 | **2.46×** |
+| `latency_match_mid_1kb` | **18.5** | 2.0 | 12.0 | 2.3 | 3.2 | 2.4 | **1.54×** |
+| `ru_hit_sparse_1mb` | **18.3** | 0.9 | – | 16.0 | 6.2 | 8.8 | **1.15×** |
+| `multi_N2_miss_log_1mb` | **15.0** | 11.6 | – | 0.7 | 5.9 | 5.8 | **1.29×** |
+| `log_miss_1kb` | **13.3** | 4.4 | 6.6 | 4.6 | 4.8 | 3.6 | **2.03×** |
+| `latency_miss_1kb` | **12.8** | 3.8 | 6.6 | 4.2 | 4.7 | 3.6 | **1.95×** |
+| `prose_hit_dense_1mb` | **12.0** | 0.0 | 5.8 | 1.0 | 3.6 | 2.8 | **2.06×** |
+| `latency_match_end_1kb` | **11.0** | 2.0 | 6.2 | 1.6 | 2.9 | 2.0 | **1.79×** |
+| `torture_miss_64kb` | **10.2** | 0.1 | 0.4 | 0.2 | 0.1 | 0.3 | **25.51×** |
+| `multi_N8_hit_log_1mb` | **10.1** | 5.9 | – | 1.9 | 1.7 | 2.8 | **1.71×** |
+| `multi_N512_miss_hazard_64kb` | **9.8** | 3.9 | – | 0.0 | 0.0 | 0.5 | **2.53×** |
+| `code_hit_brackets_256kb` | **9.1** | 0.0 | 5.0 | 1.0 | 1.1 | 0.7 | **1.82×** |
+| `ru_latency_miss_1kb` | **8.0** | 3.1 | – | 4.6 | 3.5 | 3.4 | **1.74×** |
 
-Diagnostic baselines (`ToLower`+`Index`, the Go Aho-Corasick port, and the exact-match `ceiling`) are omitted from the “fastest” comparison — see [Is the benchmark fair?](#is-the-benchmark-fair). Reproduce all of it with `./scripts/reproduce.sh`.
+Diagnostic baselines (`ToLower`+`Index`, the Go Aho-Corasick port, and the exact-match `ceiling`) are omitted from the “fastest” comparison — see [Is the benchmark fair?](#is-the-benchmark-fair). Rebuild the field and rerun the local board with `./scripts/reproduce.sh`.
 </details>
 
 - **Every one of the 33 rows is faster than the entire field** — ASCII and
@@ -140,18 +214,29 @@ Diagnostic baselines (`ToLower`+`Index`, the Go Aho-Corasick port, and the exact
 - The narrower engines run at their native max width — **veloz is 256-bit**
   (an AVX2 library), **PCRE2-JIT is 128-bit**. Where one of those is the fastest
   competitor, part of the margin is that `casei` targets AVX-512 and they do not
-  — a real ISA advantage, not a handicap. The per-engine widths are in the table
-  so you can separate that from the equal-width Vectorscan result.
+  — a real ISA advantage, not a handicap. The benchmark output reports every
+  entrant's dispatched width so you can separate that from the equal-width
+  Vectorscan result.
+- **This is a first-match result.** A separate direct integration with rebar's
+  `count`/`count-spans` models found real losses: on the five performance rows
+  with the same Unicode contract, the current loop-over-`Find` adapter wins two
+  and loses three on both hosts. That is a different API and an open piece of
+  work, not part of the 33-row claim. [The complete rebar audit](REBAR.md) lists
+  every applicable row, including the losses.
 
-Correctness is pinned to Go `regexp` `(?i)` by differential and fuzz on **every**
-backend (AVX-512, AVX2, scalar): a 350k-case multi-pattern differential, a
-2.8M-case single-pattern differential, and `FuzzIndexFold` / `FuzzMatcher`.
+On valid UTF-8, correctness is pinned to Go `regexp` `(?i)` by differential and
+fuzz on **every** backend (AVX-512, AVX2, scalar): a 350k-case multi-pattern
+differential, a 2.8M-case single-pattern differential, and `FuzzIndexFold` /
+`FuzzMatcher`. Invalid-byte inputs are checked against the separate opaque-unit
+contract.
 
 ## Reproduce it
 
-On an x86-64 Linux host **with AVX-512** (a GCP `n2`/`c3`, or a recent Intel
-box — **not** Apple Silicon), one script builds the entire competitor field from
-source and runs the scoreboard. This is exactly what CI runs on every push.
+On an x86-64 Linux host **with AVX-512 VBMI** (pin a GCP `n2` to Ice Lake, use
+`c3` for Sapphire Rapids, or use equivalent recent Intel hardware — **not**
+Apple Silicon), one script builds the entire competitor field from source and
+runs the scoreboard. CI rebuilds and correctness-checks the same pinned field
+on every push; the performance board requires this stronger host contract.
 
 ```sh
 git clone https://github.com/tsenart/casei && cd casei
@@ -159,9 +244,10 @@ git clone https://github.com/tsenart/casei && cd casei
                                 # rust-regex, stringzilla, then runs the benchmark
 ```
 
-It prints, for all 33 rows, every entrant's throughput and the vector width it
-dispatched, plus `x_vs_best` (`casei`'s time ÷ the fastest *correct* competitor)
-and raw paired samples.
+It prints, for all 33 rows, every entrant's local throughput and the vector
+width it dispatched, plus `x_vs_best` (`casei`'s time ÷ the fastest *correct*
+competitor). It reruns the open local board; Perfloop's sealed case contains the
+separate randomized co-measurements behind the published tables.
 
 ## What it is
 
@@ -187,11 +273,11 @@ They are the same problem: a pattern position is a small set of UTF-8 encodings
 (its fold orbit), exact search is the singleton case, and multi-needle is the
 union. `casei` is one adaptive engine over that object.
 
-**Semantics** are Unicode **simple** case folding — exactly Go `regexp` `(?i)`,
-pinned by differential test: `k` matches `K` and the Kelvin sign U+212A; `s`
-matches long-s U+017F; `σ`/`ς`/`Σ` all match; `ß` matches `ẞ` but **not** `ss`.
-Matches start at rune boundaries and a match window's byte length can differ from
-the needle's. Bytes outside valid UTF-8 are opaque units. See
+**Semantics** are Unicode **simple** case folding — exactly Go `regexp` `(?i)`
+on valid UTF-8, pinned by differential test: `k` matches `K` and the Kelvin sign
+U+212A; `s` matches long-s U+017F; `σ`/`ς`/`Σ` all match; `ß` matches `ẞ` but
+**not** `ss`. Matches start at rune boundaries and a match window's byte length
+can differ from the needle's. Bytes outside valid UTF-8 are opaque units. See
 [`casei_test.go`](casei_test.go) for the executable definition.
 
 ## Is the benchmark fair?
@@ -210,9 +296,16 @@ This is the first thing to check, so the arena is built to answer it:
   quietly ran a portable build is not a competitor.
 - **Adversarial rows are included** (`periodic`, `samechar`, `torture`) so
   throughput can't be bought with a quadratic cliff.
+- **The result contract is explicit.** The arena asks for the first byte offset,
+  or the leftmost/lowest-pattern match. Entrants that naturally enumerate
+  matches perform the timed reduction required to answer that question. Rebar
+  asks a different question—count every non-overlapping match—and is reported
+  separately rather than borrowed as support for this claim.
 - **It's the real thing, reproducibly.** The field is nine engines pinned to
-  source versions and build flags in [`arena/field.yaml`](arena/field.yaml);
-  ratios come from raw paired, order-alternated samples with confidence bounds.
+  source versions and build flags in [`arena/field.yaml`](arena/field.yaml).
+  Published ratios come from Perfloop's raw co-measured samples with randomized
+  entrant order and confidence bounds; `reproduce.sh` separately rebuilds that
+  field and reruns the local `BenchmarkBar` board.
 
 The honest asterisk: the arena was developed alongside `casei`, so it is not a
 neutral third-party harness. That is exactly why it is open and reproducible, and
@@ -229,10 +322,13 @@ why the competitors are the field's real specialists at full strength.
   one-shot lookup pays that setup and `strings.Index` wins it.
 - **Simple folding, not full.** `ß`→`ss` is a different, harder problem
   (StringZilla implements it); it is specified but not built here.
-- **Not yet run inside [rebar](https://github.com/BurntSushi/rebar).** The arena
-  has rows analogous to rebar's `sherlock-casei-en/ru`, and beats the same engine
-  family on them, but on its own corpora. Wiring `casei` into rebar directly is
-  the open follow-up.
+- **First match, not all matches.** `casei` has no iterator or count API yet.
+  We wired it into every applicable caseless literal/alternation workload in
+  [rebar](https://github.com/BurntSushi/rebar): its loop-over-`Find` adapter is
+  correct, but loses three of the five Unicode-equivalent performance rows on
+  both measured hosts. Maintaining scan state across hits is the next required
+  construction. See [`REBAR.md`](REBAR.md), including the ASCII-only rows that
+  deliberately ask weaker semantics than `casei` implements.
 
 ## How it was built
 
@@ -240,7 +336,7 @@ why the competitors are the field's real specialists at full strength.
 operator-directed mode: an operator aimed the loop — submitting each hypothesis,
 steering candidates with reviews, auditing the competitor field and the host
 ISA — and Perfloop did the proving: it generated every candidate, measured each
-against the pinned field under paired sampling, verified the winner
+against the pinned field with randomized-order co-measurement, verified the winner
 independently, and sealed the receipts. No claim here rests on the operator's
 judgment; every one rests on a sealed measurement.
 
@@ -255,6 +351,11 @@ operator at all.
 
 ## Details
 
+- [`HOW_IT_WORKS.md`](HOW_IT_WORKS.md) — the Feynman-level mechanism first,
+  then the exact plan, assembly contribution, competitor comparison, and
+  evidence.
+- [`REBAR.md`](REBAR.md) — every applicable third-party rebar workload, the
+  semantic map, both-host measurements, real losses, and the missing iterator.
 - [`arena/field.yaml`](arena/field.yaml) — the field: versions, build flags,
   ISA, corpus hashes, semantic status.
 - [`CONTEXT.md`](CONTEXT.md) — every technique known to this problem, with

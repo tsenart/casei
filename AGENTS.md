@@ -103,7 +103,7 @@ alternative present.
 pinned sources by the prepare scripts; without them the arena does not build,
 which is deliberate -- a bar run that silently dropped the field once measured
 rows at 0.31-0.90 that read 1.09 to 1202 the moment a real matcher entered.
-This is exactly what CI runs on every push:
+The full acceptance run is:
 
 ```
 sudo apt-get install -y cargo cmake curl libboost-dev pkg-config python3-pip
@@ -115,6 +115,10 @@ export PKG_CONFIG_SYSROOT_DIR="$native/root"
 export LD_LIBRARY_PATH="$native/root/usr/lib/x86_64-linux-gnu"
 go test -run '^$' -bench BenchmarkBar
 ```
+
+CI builds this same pinned field and runs its agreement tests on every push.
+Hosted CI runners do not satisfy the AVX-512 VBMI performance-host contract, so
+the full `BenchmarkBar` acceptance run happens separately on a qualifying host.
 
 Every row reports an `entrants` count and each entrant's dispatched vector
 width. A row with `entrants` below 2 was measured against the floor alone: say
@@ -197,14 +201,14 @@ overhead to it, and a ratio cannot tell you no search was invented.
 Target amd64, plus a correct portable fallback. arm64/NEON is out of scope for
 now and its absence is not a defect.
 
-**The measurement host has AVX-512, not merely AVX2.** Recorded CPU is
-`genuineintel/6/85` (Skylake-SP class) and sessions observe `avx512f`,
-`avx512bw`, `avx512cd`, `avx512dq`, `avx512vl`. Use them: 512-bit vectors,
-byte-granularity compares under BW, `vpermb` for in-register table lookup, and
-k-mask registers that make set/liveness arithmetic native rather than emulated.
-An earlier version of this file said AVX2 and that was an unchecked assumption,
-not a constraint -- state counts computed against 256-bit lanes were computed
-against the wrong machine.
+**The performance hosts have AVX-512 VBMI, not merely AVX2 or base AVX-512.**
+Published measurements cover Intel Ice Lake (`genuineintel/6/106`) and Sapphire
+Rapids (`genuineintel/6/143`), with `avx512f`, `avx512bw`, and `avx512vbmi`
+present. Use them: 512-bit vectors, byte-granularity compares under BW,
+`vpermb` for in-register table lookup under VBMI, and k-mask registers that
+make set/liveness arithmetic native rather than emulated. A Skylake-SP host
+(`genuineintel/6/85`) lacks VBMI and does not qualify for the full-strength
+field comparison because Vectorscan cannot dispatch its strongest path there.
 
 Gate every path on runtime feature detection with a portable fallback. Say
 which ISA a measurement covers; cross-compilation proves portability, not

@@ -300,6 +300,27 @@ func countAll(index func(h, n string) int, h, n string) int {
 	return c
 }
 
+// runSingleScenario is the shared single-needle operation for both benchmark
+// surfaces. Count rows must measure all overlap-allowed occurrences; every
+// other row measures the first match.
+func runSingleScenario(index func(h, n string) int, s scenario) int {
+	if s.count {
+		return countAll(index, s.haystack, s.needle)
+	}
+	return index(s.haystack, s.needle)
+}
+
+func TestRunSingleScenarioHonorsCount(t *testing.T) {
+	s := scenario{haystack: "aaaa", needle: "aa", count: true}
+	if got := runSingleScenario(strings.Index, s); got != 3 {
+		t.Fatalf("count scenario = %d, want 3", got)
+	}
+	s.count = false
+	if got := runSingleScenario(strings.Index, s); got != 0 {
+		t.Fatalf("first-match scenario = %d, want 0", got)
+	}
+}
+
 // TestBaselinesAgree pins every implementation to the reference on the whole
 // scenario matrix, so a benchmark win can never come from semantic drift.
 // On the UTF-8 tier only fold-exact implementations are held to it.
@@ -335,14 +356,8 @@ func BenchmarkIndexFold(b *testing.B) {
 			b.Run(s.name+"/"+im.name, func(b *testing.B) {
 				b.SetBytes(int64(len(s.haystack)))
 				b.ReportAllocs()
-				if s.count {
-					for i := 0; i < b.N; i++ {
-						sink = countAll(im.index, s.haystack, s.needle)
-					}
-				} else {
-					for i := 0; i < b.N; i++ {
-						sink = im.index(s.haystack, s.needle)
-					}
+				for b.Loop() {
+					sink = runSingleScenario(im.index, s)
 				}
 			})
 		}
@@ -350,22 +365,18 @@ func BenchmarkIndexFold(b *testing.B) {
 		// the timed region (ASCII fold on the ASCII tier, canonical simple
 		// fold on the UTF-8 tier). This is the physics target the winning
 		// implementation is judged against (see CONTEXT.md).
-		var lh, ln string
+		ceiling := s
 		if s.utf8 {
-			lh, ln = canonFoldString(s.haystack), canonFoldString(s.needle)
+			ceiling.haystack = canonFoldString(s.haystack)
+			ceiling.needle = canonFoldString(s.needle)
 		} else {
-			lh, ln = asciiLower(s.haystack), asciiLower(s.needle)
+			ceiling.haystack = asciiLower(s.haystack)
+			ceiling.needle = asciiLower(s.needle)
 		}
 		b.Run(s.name+"/ceiling", func(b *testing.B) {
-			b.SetBytes(int64(len(lh)))
-			if s.count {
-				for i := 0; i < b.N; i++ {
-					sink = countAll(strings.Index, lh, ln)
-				}
-			} else {
-				for i := 0; i < b.N; i++ {
-					sink = strings.Index(lh, ln)
-				}
+			b.SetBytes(int64(len(ceiling.haystack)))
+			for b.Loop() {
+				sink = runSingleScenario(strings.Index, ceiling)
 			}
 		})
 	}
