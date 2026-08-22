@@ -11,6 +11,9 @@ import sys
 
 
 PREFIX = "BenchmarkBar/"
+# EXPECTED_ROWS is the board published before the focused Unicode-confirmation
+# row was added. REQUIRED_ROWS is the current acceptance board: every member is
+# subject to the same win, entrant-count, and dispatch requirements.
 EXPECTED_ROWS = frozenset(
     {
         "multi/multi_N2_miss_log_1mb",
@@ -48,8 +51,15 @@ EXPECTED_ROWS = frozenset(
         "single/torture_miss_64kb",
     }
 )
+TARGETED_ROWS = frozenset(
+    {
+        "multi/multi_N1_unicode_pair_miss_1_5mb",
+    }
+)
+REQUIRED_ROWS = EXPECTED_ROWS | TARGETED_ROWS
 UTF8_ROWS = frozenset(
     {
+        "multi/multi_N1_unicode_pair_miss_1_5mb",
         "multi/multi_N512_miss_hazard_64kb",
         "multi/multi_N64_miss_ru_64kb",
         "multi/multi_N8_hazard_hit_1mb",
@@ -140,11 +150,11 @@ def parse(path):
 def verify(path, expected_samples=3):
     rows = parse(path)
     found = set(rows)
-    if found != EXPECTED_ROWS:
+    if found != REQUIRED_ROWS:
         raise VerificationError(
             f"{path}: row inventory differs; "
-            f"missing={sorted(EXPECTED_ROWS - found)}, "
-            f"unexpected={sorted(found - EXPECTED_ROWS)}"
+            f"missing={sorted(REQUIRED_ROWS - found)}, "
+            f"unexpected={sorted(found - REQUIRED_ROWS)}"
         )
 
     wrong_counts = {
@@ -249,8 +259,8 @@ def verify(path, expected_samples=3):
     worst_row = max(medians, key=medians.get)
     worst_sample = max(
         sample["x_vs_best"]
-        for samples in rows.values()
-        for sample in samples
+        for name in REQUIRED_ROWS
+        for sample in rows[name]
     )
     median_speedup = median(1 / ratio for ratio in medians.values())
     entrant_counts = [
@@ -259,7 +269,8 @@ def verify(path, expected_samples=3):
         for sample in samples
     ]
     return (
-        f"PASS: 33/33 rows; worst median {worst_row}={medians[worst_row]:.4f}; "
+        f"PASS: {len(REQUIRED_ROWS)}/{len(REQUIRED_ROWS)} rows; "
+        f"worst median {worst_row}={medians[worst_row]:.4f}; "
         f"worst sample={worst_sample:.4f}; median speedup={median_speedup:.2f}x; "
         f"entrants={min(entrant_counts)}-{max(entrant_counts)}; "
         "casei=512-bit; Vectorscan=512-bit VBMI; field dispatch verified"

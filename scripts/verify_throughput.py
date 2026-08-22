@@ -13,7 +13,7 @@ import sys
 sys.dont_write_bytecode = True
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
-from verify_benchmarkbar import EXPECTED_ROWS, is_utf8_row  # noqa: E402
+from verify_benchmarkbar import REQUIRED_ROWS, is_utf8_row  # noqa: E402
 
 
 VISIBLE = (
@@ -99,11 +99,11 @@ def parse(path):
 def verify(path, expected_samples=3, require_wins=True):
     rows = parse(path)
     found = set(rows)
-    if found != EXPECTED_ROWS:
+    if found != REQUIRED_ROWS:
         raise VerificationError(
             f"{path}: row inventory differs; "
-            f"missing={sorted(EXPECTED_ROWS - found)}, "
-            f"unexpected={sorted(found - EXPECTED_ROWS)}"
+            f"missing={sorted(REQUIRED_ROWS - found)}, "
+            f"unexpected={sorted(found - REQUIRED_ROWS)}"
         )
 
     medians = {}
@@ -134,7 +134,7 @@ def verify(path, expected_samples=3, require_wins=True):
 
 
 def render(medians, title, selected=None):
-    rows = set(medians) if selected is None else set(selected)
+    rows = REQUIRED_ROWS if selected is None else set(selected)
     unknown = rows - set(medians)
     if unknown:
         raise VerificationError(f"unknown selected rows: {sorted(unknown)}")
@@ -164,11 +164,12 @@ def render(medians, title, selected=None):
 
 
 def summary(medians):
-    ratios = {row: result[2] for row, result in medians.items()}
+    ratios = {row: medians[row][2] for row in REQUIRED_ROWS}
     narrowest = min(ratios, key=ratios.get)
     widest = max(ratios, key=ratios.get)
     return (
-        f"PASS: 33/33 throughput rows; narrowest {narrowest}={ratios[narrowest]:.2f}x; "
+        f"PASS: {len(REQUIRED_ROWS)}/{len(REQUIRED_ROWS)} throughput rows; "
+        f"narrowest {narrowest}={ratios[narrowest]:.2f}x; "
         f"widest {widest}={ratios[widest]:.2f}x; three samples per lane"
     )
 

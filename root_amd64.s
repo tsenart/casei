@@ -2842,3 +2842,171 @@ pairpairvbmidone64:
 	MOVQ BX, ret+24(FP)
 	VZEROUPPER
 	RET
+
+// pairPairConfirmVBMI64 keeps the pair-pair candidate mask in the AVX-512
+// loop and checks each set bit against the bounded raw-token representation.
+// The packed confirmation has ten-byte parts: values at 0, 2, and 4, source
+// offset at 6, width at 7, and value count at 8. Its anchor offset and vector
+// part count are at 201 and 202 after its twenty slots. The pair-pair slots
+// are excluded from that count after their UTF-8 byte classes make the VBMI
+// low-six-bit table hits exact.
+TEXT ·pairPairConfirmVBMI64(SB), NOSPLIT, $0-40
+	MOVQ ptr+0(FP), AX
+	MOVQ n+8(FP), DX
+	MOVQ filter+16(FP), SI
+	MOVQ confirm+24(FP), DI
+	XORQ BX, BX
+	MOVQ $-1, CX
+	KMOVQ CX, K1
+	VMOVDQU8 0(SI), K1, Z1
+	VMOVDQU8 64(SI), K1, Z2
+	VMOVDQU8 128(SI), K1, Z3
+	VMOVDQU8 192(SI), K1, Z4
+	MOVBLZX 256(SI), R8
+
+pairpairconfirmdouble64:
+	CMPQ DX, $128
+	JL pairpairconfirmsingle64
+	VMOVDQU8 (AX), K1, Z0
+	VMOVDQU8 1(AX), K1, Z9
+	VMOVDQU8 (AX)(R8*1), K1, Z10
+	VMOVDQU8 1(AX)(R8*1), K1, Z11
+	VMOVDQU8 64(AX), K1, Z12
+	VMOVDQU8 65(AX), K1, Z13
+	VMOVDQU8 64(AX)(R8*1), K1, Z14
+	VMOVDQU8 65(AX)(R8*1), K1, Z15
+
+	VPERMB Z1, Z0, Z0
+	VPERMB Z2, Z9, Z9
+	VPERMB Z3, Z10, Z10
+	VPERMB Z4, Z11, Z11
+	VPTESTMB Z9, Z0, K1, K2
+	VPTESTMB Z11, Z10, K1, K3
+	KANDQ K2, K3, K2
+
+	VPERMB Z1, Z12, Z12
+	VPERMB Z2, Z13, Z13
+	VPERMB Z3, Z14, Z14
+	VPERMB Z4, Z15, Z15
+	VPTESTMB Z13, Z12, K1, K3
+	VPTESTMB Z15, Z14, K1, K4
+	KANDQ K3, K4, K3
+	KORTESTQ K2, K3
+	JEQ pairpairconfirmadvance128
+
+	KMOVQ K2, CX
+	XORQ SI, SI
+	TESTQ CX, CX
+	JNZ pairpairconfirmcandidate
+	JMP pairpairconfirmsecond
+
+pairpairconfirmsecond:
+	MOVQ $1, SI
+	KMOVQ K3, CX
+	TESTQ CX, CX
+	JNZ pairpairconfirmcandidate
+	JMP pairpairconfirmadvance128
+
+pairpairconfirmcandidate:
+	BSFQ CX, R9
+	LEAQ (AX)(R9*1), R10
+	CMPQ SI, $1
+	JNE pairpairconfirmbase
+	ADDQ $64, R10
+pairpairconfirmbase:
+	MOVBLZX 201(DI), R13
+	SUBQ R13, R10
+	LEAQ (R10)(R13*1), R11
+	MOVQ $0x80C0, R14
+	MOVWQZX (R11), R12
+	ANDQ $0xC0C0, R12
+	CMPQ R14, R12
+	JNE pairpairconfirmreject
+	MOVWQZX (R11)(R8*1), R12
+	ANDQ $0xC0C0, R12
+	CMPQ R14, R12
+	JNE pairpairconfirmreject
+	MOVQ DI, R11
+	MOVBLZX 202(DI), R12
+	TESTQ R12, R12
+	JZ pairpairconfirmaccepted
+pairpairconfirmpart:
+	MOVBLZX 6(R11), R13
+	MOVBLZX 7(R11), R14
+	CMPQ R14, $2
+	JEQ pairpairconfirmword
+	MOVBLZX (R10)(R13*1), R14
+	JMP pairpairconfirmvalue
+pairpairconfirmword:
+	MOVWQZX (R10)(R13*1), R14
+pairpairconfirmvalue:
+	MOVWQZX 0(R11), R15
+	CMPQ R14, R15
+	JEQ pairpairconfirmnext
+	CMPB 8(R11), $2
+	JL pairpairconfirmreject
+	MOVWQZX 2(R11), R15
+	CMPQ R14, R15
+	JEQ pairpairconfirmnext
+	CMPB 8(R11), $3
+	JNE pairpairconfirmreject
+	MOVWQZX 4(R11), R15
+	CMPQ R14, R15
+	JNE pairpairconfirmreject
+pairpairconfirmnext:
+	ADDQ $10, R11
+	DECQ R12
+	JNZ pairpairconfirmpart
+pairpairconfirmaccepted:
+	ADDQ R9, BX
+	CMPQ SI, $1
+	JNE pairpairconfirmdone
+	ADDQ $64, BX
+	JMP pairpairconfirmdone
+
+pairpairconfirmreject:
+	BTRQ R9, CX
+	TESTQ CX, CX
+	JNZ pairpairconfirmcandidate
+	CMPQ SI, $0
+	JEQ pairpairconfirmsecond
+	CMPQ SI, $1
+	JEQ pairpairconfirmadvance128
+	JMP pairpairconfirmadvance64
+
+pairpairconfirmadvance128:
+	ADDQ $128, AX
+	ADDQ $128, BX
+	SUBQ $128, DX
+	JMP pairpairconfirmdouble64
+
+pairpairconfirmsingle64:
+	CMPQ DX, $64
+	JL pairpairconfirmdone
+	VMOVDQU8 (AX), K1, Z0
+	VMOVDQU8 1(AX), K1, Z9
+	VMOVDQU8 (AX)(R8*1), K1, Z10
+	VMOVDQU8 1(AX)(R8*1), K1, Z11
+	VPERMB Z1, Z0, Z0
+	VPERMB Z2, Z9, Z9
+	VPERMB Z3, Z10, Z10
+	VPERMB Z4, Z11, Z11
+	VPTESTMB Z9, Z0, K1, K2
+	VPTESTMB Z11, Z10, K1, K3
+	KANDQ K2, K3, K2
+	KTESTQ K2, K2
+	JEQ pairpairconfirmadvance64
+	KMOVQ K2, CX
+	MOVQ $2, SI
+	JMP pairpairconfirmcandidate
+
+pairpairconfirmadvance64:
+	ADDQ $64, AX
+	ADDQ $64, BX
+	SUBQ $64, DX
+	JMP pairpairconfirmsingle64
+
+pairpairconfirmdone:
+	MOVQ BX, ret+32(FP)
+	VZEROUPPER
+	RET

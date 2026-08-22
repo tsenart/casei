@@ -65,6 +65,7 @@ func pairShuftiSkip64(ptr *byte, n int, filter *pairShuftiFilter) int
 func pairShuftiWithOnesSkip64(ptr *byte, n int, filter *pairShuftiFilter) int
 func pairPairSkip64(ptr *byte, n int, filter *pairPairFilter) int
 func pairPairVBMISkip64(ptr *byte, n int, filter *pairPairVBMIFilter) int
+func pairPairConfirmVBMI64(ptr *byte, n int, filter *pairPairVBMIFilter, confirm *byte) int
 func pairPairWordSkip64(ptr *byte, n int, filter *pairPairFilter) int
 func pairSecondSkip32(ptr *byte, n int, filter *rootFilter) int
 func pairSecondSkip64(ptr *byte, n int, filter *rootFilter) int
@@ -431,6 +432,14 @@ func pairShuftiSkipBytes(s string, at int, filter *rootFilter) int {
 		}
 	}
 	return at - start + pairShuftiSkipScalar(s, at, &filter.shufti)
+}
+
+// pairPairConfirmBytes scans full 64-start blocks and returns the first
+// fully confirmed anchor, or candidates when no full-block candidate matches.
+// findUnicodePairConfirm establishes the feature and bound guards.
+func pairPairConfirmBytes(s string, at, candidates int, filter *pairPairFilter, confirm unicodePairConfirm) int {
+	ptr := (*byte)(unsafe.Add(unsafe.Pointer(unsafe.StringData(s)), at))
+	return pairPairConfirmVBMI64(ptr, candidates, &filter.vbmi, unsafe.StringData(string(confirm)))
 }
 
 func pairPairSkipBytes(s string, at int, filter *pairPairFilter) int {

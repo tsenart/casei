@@ -56,7 +56,7 @@ def row(
 
 def transcript(**override):
     lines = []
-    for index, name in enumerate(sorted(verify.EXPECTED_ROWS)):
+    for index, name in enumerate(sorted(verify.REQUIRED_ROWS)):
         values = override if index == 0 else {}
         for _ in range(3):
             lines.append(row(name, **values))
@@ -72,7 +72,7 @@ class VerifyBenchmarkBarTest(unittest.TestCase):
 
     def test_accepts_complete_winning_full_width_board(self):
         summary = self.verify_text(transcript())
-        self.assertIn("PASS: 33/33 rows", summary)
+        self.assertIn("PASS: 34/34 rows", summary)
         self.assertIn("casei=512-bit", summary)
 
     def test_rejects_losing_sample(self):
@@ -98,7 +98,7 @@ class VerifyBenchmarkBarTest(unittest.TestCase):
     def test_rejects_missing_row(self):
         text = "".join(
             row(name)
-            for name in sorted(verify.EXPECTED_ROWS)[:-1]
+            for name in sorted(verify.REQUIRED_ROWS)[:-1]
             for _ in range(3)
         )
         with self.assertRaisesRegex(verify.VerificationError, "row inventory differs"):
@@ -107,7 +107,7 @@ class VerifyBenchmarkBarTest(unittest.TestCase):
     def test_rejects_wrong_sample_count(self):
         with self.assertRaisesRegex(verify.VerificationError, "wrong sample counts"):
             self.verify_text(
-                transcript() + row(sorted(verify.EXPECTED_ROWS)[0])
+                transcript() + row(sorted(verify.REQUIRED_ROWS)[0])
             )
 
 

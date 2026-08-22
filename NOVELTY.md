@@ -1408,6 +1408,52 @@ common plan remains the sole match authority for N=1 and multi-pattern calls.
 The only falsifiable claim is operational and belongs to the arena and semantic
 differentials, not to a new search construction.
 
+### In-scan bounded Unicode confirmation: known construction, targeted result
+
+No new automaton state is claimed for this transition. For one eligible
+literal, compilation packs at most twenty exact raw-token parts. Each part
+stores one to three correlated width-stable forms of one or two bytes, its
+source offset, width, and form count. The AVX-512 pair-pair scan proves two of
+those parts while producing a 64-start mask. For each surviving bit, the same
+assembly loop checks every remaining packed part and continues scanning after
+a mismatch. Only an exact match returns to Go. The scalar tail checks the same
+packed forms. Width-changing or opaque folds, literals that exceed the bounded
+descriptor, and unsupported hosts retain the decoded transition of the same
+plan.
+
+The closest constructions are all known candidate-and-confirm machinery:
+
+| Construction | Source | Relationship |
+| --- | --- | --- |
+| Safe Unicode slice, SIMD scan, and head/tail verification | StringZilla `utf8_uncased.h`, `serial.h`, and `haswell.h` at `657f21c5d8c2c2da5da06d4a9ad87c3ef80953d0`, cited in the fused-frontier assessment above | It selects a width-safe raw slice, finds candidates in SIMD, and verifies the rest of the literal. The retained transition specializes that shape to simple folding and keeps bounded confirmation in the scanner loop. |
+| Vector probe followed by full ignore-case equality | .NET `Ordinal.cs` at `6e7f3434c54a58277a5d53eb30e89823e54788d6`, cited above | It establishes vector candidate production followed by exact caseless confirmation. Moving the confirmation across a Go/assembly boundary changes scheduling, not the accepted language. |
+| AVX2 ASCII prefilter followed by `EqualFold` confirmation | [`mhr3/veloz`](https://github.com/mhr3/veloz) and `CONTEXT.md` sections 1, 2, 3, and 5 | It is the same broad filter-then-confirm arrangement under a narrower ASCII contract. |
+| Teddy/FDR/Shufti candidate masks followed by confirmation | Vectorscan sources cited in the VBMI follow-up above; `CONTEXT.md` sections 1d and 3 through 5 | The pair-pair mask is another conservative literal filter. Keeping its mask inside the confirmation loop is an implementation schedule, not a new recognizer. |
+| Width-preserving caseless prefix acceleration | PCRE2 `pcre2_jit_compile.c` at `ff92e0b9cea5b5ae3af12ba930d03556684f098b`, cited in the prefix-invariant assessment above | Its width check is the same established eligibility boundary used to keep raw offsets stable. |
+
+The package-owned combination is still useful. It compiles the exact simple-fold
+forms once, uses a 512-bit pair-pair filter for candidate production, checks the
+whole bounded literal inside the full-block scan without returning false
+survivors to Go, and retains the decoded executor for everything outside the
+proved domain. None of the sources
+above alone provides this package's byte-offset, invalid-byte, leftmost, and
+simple-fold contract together with this measured AVX-512 position.
+
+Ten randomized co-measured pairs on
+`BenchmarkBar/multi/multi_N1_unicode_pair_miss_1_5mb` moved the candidate from
+`4.547 x_vs_best` to `0.7328 x_vs_best`, with median time falling from 450,578
+to 75,130 ns/op. That is a targeted operational result, not full acceptance.
+The complete field board, all five Unicode-equivalent Rebar rows, and both
+qualifying processors have not yet been measured for this candidate.
+
+The construction is falsified by any semantic differential, unsafe tail,
+invalid-byte mismatch, changed offset or leftmost result, or a full-board row
+at or above `1.0 x_vs_best`. Object disassembly of the current kernel shows no
+local spill, but it does reload the packed descriptor and form values inside
+the survivor loop. A future register-resident layout must be measured as a
+separate implementation result; those reloads are not disguised as one here.
+No field implementation is imported, linked, embedded, or copied.
+
 ### Complete experimental Go SIMD backend: negative result
 
 The complete amd64 vector backend was independently re-expressed with Go's

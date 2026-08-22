@@ -305,6 +305,9 @@ func FuzzIndexFold(f *testing.F) {
 	f.Add("große", "GROSSE")
 	f.Add(strings.Repeat("ab", 64), "abc")
 	f.Add("na\xc3\xafve", "\xc3\x8f")
+	f.Add(strings.Repeat("x", 64)+"ПРИКЛЮЧЕНИЯ ЛИЛИЙ"+strings.Repeat("x", 4096), "приключения лилий")
+	f.Add(strings.Repeat("x", 64)+"приключения лилия"+"x"+"ПРИКЛЮЧЕНИЯ ЛИЛИЙ"+strings.Repeat("x", 4096), "приключения лилий")
+	f.Add(strings.Repeat("x", 64)+"\x80ПРИКЛЮЧЕНИЯ ЛИЛИЙ"+strings.Repeat("x", 4096), "\x80приключения лилий")
 	f.Fuzz(func(t *testing.T, haystack, needle string) {
 		got, want := IndexFold(haystack, needle), reference(haystack, needle)
 		if got != want {

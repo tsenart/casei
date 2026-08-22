@@ -139,6 +139,17 @@ func pairShuftiSkipBytes(s string, at int, filter *rootFilter) int {
 	return pairShuftiSkipScalar(s, at, &filter.shufti)
 }
 
+func pairPairConfirmBytes(s string, at, candidates int, filter *pairPairFilter, confirm unicodePairConfirm) int {
+	start := at
+	for at-start < candidates {
+		if pairPairAt(s, at, filter) && confirm.matchesAt(s, at-confirm.anchorAt()) {
+			return at - start
+		}
+		at++
+	}
+	return candidates
+}
+
 func pairPairSkipBytes(s string, at int, filter *pairPairFilter) int {
 	start := at
 	for at+int(filter.offset)+1 < len(s) {

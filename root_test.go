@@ -755,22 +755,173 @@ func TestPairPairVBMIProjection(t *testing.T) {
 		}
 	}
 
-	// The byte projection may reach an alias, but the ordinary Unicode matcher
-	// must reject it and continue through the later exact rendering.
-	alias := []byte(strings.Repeat("x", int(filter.offset)+2))
-	alias[0], alias[1] = filter.first0^0x40, filter.second0^0x40
-	alias[filter.offset], alias[filter.offset+1] = filter.confirmFirst0^0x40, filter.confirmSecond0^0x40
-	const gap = 64
-	haystack := string(alias) + strings.Repeat("x", gap) + "ЯР"
-	want := len(alias) + gap
-	if cpu.X86.HasAVX512F && cpu.X86.HasAVX512BW && cpu.X86.HasAVX512VBMI {
-		if got := pairPairSkipBytes(haystack, 0, filter); got != 0 {
-			t.Fatalf("VBMI pair alias did not reach replay: skip=%d", got)
+	// The byte projection may reach either high-bit alias, but the fused and
+	// decoded Unicode matchers must reject it and continue to the exact form.
+	for _, aliasBit := range []byte{0x40, 0x80} {
+		alias := []byte(strings.Repeat("x", int(filter.offset)+2))
+		alias[0], alias[1] = filter.first0^aliasBit, filter.second0^aliasBit
+		alias[filter.offset], alias[filter.offset+1] = filter.confirmFirst0^aliasBit, filter.confirmSecond0^aliasBit
+		const gap = 4096
+		haystack := string(alias) + strings.Repeat("x", gap) + "ЯР"
+		want := len(alias) + gap
+		if cpu.X86.HasAVX512F && cpu.X86.HasAVX512BW && cpu.X86.HasAVX512VBMI {
+			if got := pairPairSkipBytes(haystack, 0, filter); got != 0 {
+				t.Fatalf("VBMI pair alias %#x did not reach replay: skip=%d", aliasBit, got)
+			}
+		}
+		match, ok := plan.find(haystack)
+		if !ok || match != (Match{Pattern: 0, Start: want}) {
+			t.Fatalf("VBMI pair alias %#x hid exact match: Find=%+v,%t want start %d", aliasBit, match, ok, want)
 		}
 	}
-	match, ok := plan.find(haystack)
-	if !ok || match != (Match{Pattern: 0, Start: want}) {
-		t.Fatalf("VBMI pair alias hid exact match: Find=%+v,%t want start %d", match, ok, want)
+}
+
+func TestUnicodePairConfirm(t *testing.T) {
+	if unicodePairConfirmPartSize != 10 || unicodePairConfirmLengthAt != 200 ||
+		unicodePairConfirmAnchorAt != 201 || unicodePairConfirmNAt != 202 ||
+		unicodePairConfirmPackedSize != 204 {
+		t.Fatalf("unexpected packed confirmation layout: part=%d length=%d anchor=%d n=%d size=%d",
+			unicodePairConfirmPartSize, unicodePairConfirmLengthAt, unicodePairConfirmAnchorAt,
+			unicodePairConfirmNAt, unicodePairConfirmPackedSize)
+	}
+
+	const needle = "приключения лилий"
+	plan := newSearchPlan([]string{needle})
+	confirm := plan.unicodePairConfirm()
+	if plan.unicodePairN == 0 || plan.unicodePairs[0].pairPair.valid == 0 || !confirm.valid() {
+		t.Fatalf("no bounded Unicode confirmation: anchors=%+v confirm=%+v", plan.unicodePairs, confirm)
+	}
+	if got, want := confirm.length(), len(needle); got != want {
+		t.Fatalf("confirmation length = %d, want %d", got, want)
+	}
+	if got, want := confirm.anchorAt(), plan.unicodePairs[0].at; got != want {
+		t.Fatalf("confirmation anchor = %d, want %d", got, want)
+	}
+	if got := confirm.skippedN(); got != unicodePairConfirmSkippedParts {
+		t.Fatalf("pair-pair-confirmed parts = %d, want %d", got, unicodePairConfirmSkippedParts)
+	}
+	asciiPlan := newSearchPlan([]string{"ascii literal"})
+	if !asciiPlan.asciiOnly || asciiPlan.singlePayload != "ascii literal" || asciiPlan.unicodePairConfirm().valid() {
+		t.Fatalf("all-ASCII payload was not kept separate: asciiOnly=%t payload=%q confirm=%+v",
+			asciiPlan.asciiOnly, asciiPlan.singlePayload, asciiPlan.unicodePairConfirm())
+	}
+
+	for _, rendering := range []string{needle, strings.ToUpper(needle)} {
+		if !confirm.matchesAt(rendering, 0) || !plan.matchesSingleAt(rendering, 0) {
+			t.Fatalf("confirmation rejected simple-fold rendering %q", rendering)
+		}
+	}
+	nearMiss := needle[:len(needle)-len("й")] + "я"
+	if confirm.matchesAt(nearMiss, 0) || plan.matchesSingleAt(nearMiss, 0) {
+		t.Fatalf("confirmation accepted near miss %q", nearMiss)
+	}
+	for _, nearMiss := range []string{
+		"я" + needle[len("п"):],
+		needle[:len("п")] + "я" + needle[len("п")+len("р"):],
+	} {
+		if confirm.matchesAt(nearMiss, 0) {
+			t.Fatalf("confirmation accepted pair-pair near miss %q", nearMiss)
+		}
+	}
+
+	check := func(t *testing.T, haystack string) {
+		t.Helper()
+		got, gotOK := plan.find(haystack)
+		want := reference(haystack, needle)
+		if want < 0 {
+			if gotOK || got != (Match{}) {
+				t.Fatalf("Find = %+v,%t want no match", got, gotOK)
+			}
+			return
+		}
+		if !gotOK || got != (Match{Pattern: 0, Start: want}) {
+			t.Fatalf("Find = %+v,%t want start %d", got, gotOK, want)
+		}
+	}
+	for _, offset := range []int{0, 1, 63, 64, 127, 128, 4095} {
+		for _, rendering := range []string{needle, strings.ToUpper(needle)} {
+			check(t, strings.Repeat("x", offset)+rendering+strings.Repeat("x", 4096))
+		}
+		check(t, strings.Repeat("x", offset)+nearMiss+strings.Repeat("x", 4096))
+	}
+	// Both candidates occupy one 64-start vector block. The first is rejected
+	// by the final token, so the kernel must continue to the later exact one.
+	check(t, strings.Repeat("x", 64)+nearMiss+"x"+strings.ToUpper(needle)+strings.Repeat("x", 4096))
+	// The final valid start is outside a complete vector block and stays on the
+	// bounded scalar tail.
+	check(t, strings.Repeat("x", 4096)+strings.ToUpper(needle))
+
+	// The byte-pair anchor need not be the first token. Its coordinate is
+	// translated back to the literal start inside the vector kernel.
+	prefixedNeedle := "x" + needle
+	prefixedPlan := newSearchPlan([]string{prefixedNeedle})
+	prefixedConfirm := prefixedPlan.unicodePairConfirm()
+	if !prefixedConfirm.valid() || prefixedConfirm.anchorAt() != prefixedPlan.unicodePairs[0].at ||
+		prefixedPlan.unicodePairs[0].pairPair.valid == 0 || prefixedPlan.unicodePairs[0].at == 0 {
+		t.Fatalf("no displaced confirmation anchor: anchors=%+v confirm=%+v", prefixedPlan.unicodePairs, prefixedConfirm)
+	}
+	prefixedHaystack := strings.Repeat("z", 64) + strings.ToUpper(prefixedNeedle) + strings.Repeat("z", 4096)
+	if got, ok := prefixedPlan.find(prefixedHaystack); !ok || got != (Match{Pattern: 0, Start: 64}) {
+		t.Fatalf("displaced-anchor Find = %+v,%t want start 64", got, ok)
+	}
+
+	if got := makeUnicodePairConfirm("Σя", 0); !got.valid() || got.partN(0) != 3 {
+		t.Fatalf("three-way width-stable confirmation = %+v, want three forms", got)
+	}
+	threePlan := newSearchPlan([]string{"яраΣ"})
+	threeConfirm := threePlan.unicodePairConfirm()
+	hasThreeWay := func(confirm unicodePairConfirm) bool {
+		for part := range int(confirm[unicodePairConfirmNAt]) {
+			if confirm.partN(part) == 3 {
+				return true
+			}
+		}
+		for skipped := range confirm.skippedN() {
+			at := unicodePairConfirmSkippedAt + skipped*unicodePairConfirmPartSize
+			if confirm[at+8] == 3 {
+				return true
+			}
+		}
+		return false
+	}
+	if !threeConfirm.valid() || threeConfirm.skippedN() != unicodePairConfirmSkippedParts || !hasThreeWay(threeConfirm) {
+		t.Fatalf("three-way plan confirmation = %+v", threeConfirm)
+	}
+	threeHaystack := strings.Repeat("x", 64) + "ЯРАς" + strings.Repeat("x", 4096)
+	if got, ok := threePlan.find(threeHaystack); !ok || got != (Match{Pattern: 0, Start: 64}) {
+		t.Fatalf("three-way Find = %+v,%t want start 64", got, ok)
+	}
+	unsupported := []struct {
+		pattern, rendering string
+	}{
+		{"kя", "KЯ"},       // Kelvin sign changes the first token width.
+		{"ϴя", "θЯ"},       // Greek theta has four width-stable simple-fold spellings.
+		{"\x80я", "\x80Я"}, // Malformed bytes retain opaque matching.
+		{strings.Repeat("я", unicodePairConfirmMaxParts+1), strings.Repeat("Я", unicodePairConfirmMaxParts+1)},
+	}
+	for _, tc := range unsupported {
+		if got := makeUnicodePairConfirm(tc.pattern, 0); got.valid() {
+			t.Fatalf("unsupported confirmation shape %q compiled as %+v", tc.pattern, got)
+		}
+		fallback := newSearchPlan([]string{tc.pattern})
+		if confirm := fallback.unicodePairConfirm(); confirm.valid() {
+			t.Fatalf("unsupported plan %q retained raw confirmation %+v", tc.pattern, confirm)
+		}
+		haystack := strings.Repeat("x", 64) + tc.rendering + strings.Repeat("x", 4096)
+		want := reference(haystack, tc.pattern)
+		if got, ok := fallback.find(haystack); !ok || got != (Match{Pattern: 0, Start: want}) {
+			t.Fatalf("fallback Find(%q) = %+v,%t want start %d", tc.pattern, got, ok, want)
+		}
+	}
+
+	// The vector transition is an optimization only. Disabling its final ISA
+	// feature must keep the decoded pair-pair executor's answer unchanged.
+	if cpu.X86.HasAVX512F && cpu.X86.HasAVX512BW && cpu.X86.HasAVX512VBMI {
+		hasVBMI := cpu.X86.HasAVX512VBMI
+		cpu.X86.HasAVX512VBMI = false
+		defer func() { cpu.X86.HasAVX512VBMI = hasVBMI }()
+		check(t, strings.Repeat("x", 64)+strings.ToUpper(needle)+strings.Repeat("x", 4096))
+		check(t, strings.Repeat("x", 64)+nearMiss+strings.Repeat("x", 4096))
 	}
 }
 
