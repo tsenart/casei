@@ -3,48 +3,8 @@
 `casei` searches UTF-8 text without lowercasing it first. `IndexFold` finds one
 literal. A compiled `Matcher` finds the leftmost of many literals in one scan.
 Both use Unicode simple case folding, the same relation as Go's `regexp (?i)`
-on valid UTF-8.
-
-On Intel Ice Lake and Sapphire Rapids with AVX-512F/BW/VBMI, `casei` finished
-first on all 33 rows of its open arena. The median speedup over the fastest
-correct alternative was 1.9x on Ice Lake and 1.6x on Sapphire Rapids. The arena
-covers first-match search plus five single-needle rows that count
-overlap-allowed matches through repeated `IndexFold` calls. The result covers
-the AVX-512 path only.
-
-Rebar asks a broader enumeration question, and `casei` does not lead it yet. I
-later wired `casei` into every Rebar workload that can be expressed as one
-literal or a finite set of literals. Rebar counts every non-overlapping match.
-On the five rows with the same Unicode folding contract, `casei` wins two and
-loses three on both hosts. Its worst loss is 9.86x on Ice Lake and 9.18x on
-Sapphire Rapids.
-
-| measured question | Ice Lake | Sapphire Rapids |
-|---|---:|---:|
-| casei arena, 33 rows | 33/33 wins; 1.9x median lead | 33/33 wins; 1.6x median lead |
-| Unicode-equivalent Rebar rows | 2/5 wins; worst loss 9.86x | 2/5 wins; worst loss 9.18x |
-
-Those losses exposed a hole in the original gym. Five single-needle count rows
-were present, but the competitive bar mistakenly timed their first match during
-the engine's original build. That wiring was corrected before the publication
-runs, and `casei` still won all five. The arena still had no multi-pattern
-enumeration rows and none of Rebar's real count/count-spans workloads. Perfloop
-optimized the board I supplied. It was never asked to win on those paths. The
-[Rebar audit](REBAR.md) records the complete inventory, measurements, and root
-causes.
-
-I built the engine as a hard, self-contained test for
-[Perfloop](https://app.perfloop.ai). I supplied the problem and constraints;
-Perfloop generated candidates and measured them against the field. An independent
-verifier then tried to break the survivor. [The full engine Case](https://app.perfloop.ai/t/oss/case_9r9ntnxjd1)
-is public.
-
-Three public Perfloop Cases are open on the measured gaps. They cover
-[shared interior anchors for multi-pattern Unicode search](https://app.perfloop.ai/t/oss/case_jws72csfa9),
-[dispersed byte probes for the two single-pattern losses](https://app.perfloop.ai/t/oss/case_b2m0dmh5wa),
-and [raw-byte confirmation after a surviving anchor](https://app.perfloop.ai/t/oss/case_tgkp9bs0r6).
-Any change accepted into `casei` must win all five comparable Rebar rows on
-both processors while keeping every arena row below 1.0 `x_vs_best`.
+on valid UTF-8. Matches keep their original byte offsets, and the search never
+builds a lowercased copy of the input.
 
 ## Use it
 
@@ -86,29 +46,86 @@ Requires Go 1.22+. The AVX-512 and AVX2 paths are chosen at runtime on x86-64;
 every other platform runs the portable path, which returns identical results
 (see [Limitations](#limitations) for what that costs).
 
-## Why it is fast
+## Where it stands
 
-`casei` gets most of its speed by proving where a match cannot start.
+On Intel Ice Lake and Sapphire Rapids with AVX-512F/BW/VBMI, `casei` finished
+first on all 33 rows of its open arena. The median speedup over the fastest
+correct alternative was 1.9x on Ice Lake and 1.6x on Sapphire Rapids. Those
+rows cover first-match search and five single-needle count workloads.
 
-Compilation produces two views of the same patterns:
+Rebar asks a broader question: enumerate every non-overlapping match. On its
+five rows with the same Unicode folding contract, `casei` wins two and loses
+three on both hosts.
+
+| measured question | Ice Lake | Sapphire Rapids |
+|---|---:|---:|
+| casei arena, 33 rows | 33/33 wins; 1.9x median lead | 33/33 wins; 1.6x median lead |
+| Unicode-equivalent Rebar rows | 2/5 wins; worst loss 9.86x | 2/5 wins; worst loss 9.18x |
+
+This is the current boundary. The speed result covers x86-64 AVX-512 and the
+arena's first-match and single-needle count contract. It does not claim
+leadership for non-overlapping enumeration. The [Rebar audit](REBAR.md) records
+every applicable workload, all six raw measurement passes, and the three
+losses.
+
+The Rebar result also found missing coverage in the original gym. Its
+competitive bar had no multi-pattern enumeration row and none of Rebar's real
+count/count-spans workloads. Perfloop optimized the board I supplied, so those
+paths were not part of the original target.
+
+### Work in progress
+
+Two newer public Cases carry the gap work forward:
+
+- [Keep N=1 confirmation inside the AVX-512 scan](https://app.perfloop.ai/t/oss/case_s8c41a1per)
+  moved a new false-survivor row from `x_vs_best=4.547` to `0.7328` in ten
+  randomized pairs. [PR #10](https://github.com/tsenart/casei/pull/10) is open;
+  that targeted result has not yet passed the full two-host board.
+- [Replace the decoded transition loop with one raw-byte plan](https://app.perfloop.ai/t/oss/case_rmg4fdm3me)
+  is the open general path for the remaining decoded-confirmation cost.
+
+The older hypotheses and their stopped results remain in the
+[Rebar audit](REBAR.md#public-work-on-the-losses). A change is accepted only if
+all five comparable Rebar rows win on both processors and every current
+`BenchmarkBar` row remains below `x_vs_best=1.0` against the full-strength
+field.
+
+I built `casei` as a hard, self-contained test for
+[Perfloop](https://app.perfloop.ai). I supplied the problem, constraints,
+hypotheses, and reviews. Perfloop generated and measured the candidates. A
+separate verifier tried to break each survivor. The
+[full engine Case](https://app.perfloop.ai/t/oss/case_9r9ntnxjd1) is public.
+
+## How it gets its speed
+
+A literal could start at every byte of the haystack. Checking the complete
+Unicode relation at every byte is expensive, so `casei` first eliminates
+starts with cheaper byte tests.
+
+Compilation produces an exact plan and a set of cheaper byte tests:
 
 ```text
 patterns -> complete simple-fold plan -> exact answer
         \-> conservative byte filters -> 64 starts at once -> survivors only
 ```
 
-The byte sieve rejects 64 impossible starts at a time. A surviving bit means
-only “maybe.” The complete fold plan checks every survivor and decides Unicode
-equivalence, byte offsets, leftmost order, and pattern ties, so a false positive
-only adds work.
+The AVX-512 sieve tests 64 possible starts together. On sparse workloads, most
+blocks produce no survivors. A surviving bit means only “maybe,” so the exact
+plan still decides Unicode equivalence, byte offsets, leftmost order, and
+pattern ties. A filter may admit extra work, but it may never reject a real
+match.
 
-Both APIs use the same fold-token state machine. A multi-needle matcher walks
-the haystack once, and AVX-512 runs its sieve over 64 possible starts at a time.
-A scheduling change in one hand-written Shufti kernel improved its contested
-row by 21.8%. Replacing the complete backend with Go's experimental SIMD
-package passed correctness and slowed a required field row. Across all 33 rows,
-bypassing the shape-selected filters made the median row 3.88x slower on Ice
-Lake and 4.28x slower on Sapphire Rapids.
+The compiler chooses selective byte positions for the actual pattern set, and
+shape-specific kernels evaluate them with 512-bit VBMI tables and mask
+registers. One package-owned fold-token state machine handles both one needle
+and many, so the fast path does not delegate to a second matcher.
+
+The assembly matters, but it amplifies the plan rather than replacing it. One
+Shufti scheduling change improved its contested row by 21.8%. Bypassing the
+shape-selected filters made the median row 3.88x slower on Ice Lake and 4.28x
+slower on Sapphire Rapids. Replacing the complete backend with Go's
+experimental SIMD package passed correctness and made a required field row
+slower.
 
 [The one-page explanation](HOW_IT_WORKS.md) walks from that mental model to the
 actual plan, kernels, competitor differences, causal measurements, and limits.

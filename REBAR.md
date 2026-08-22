@@ -204,28 +204,34 @@ runner uses the native PCRE2 API, so no compiled search or JIT code changed.
 
 ## Public work on the losses
 
-Perfloop records four public Cases around these losses. Three cover the
-remaining performance hypotheses:
+The first four Perfloop experiments are public and stopped:
 
 - [Compile shared interior UTF-8 anchors for multi-pattern plans](https://app.perfloop.ai/t/oss/case_jws72csfa9)
-  targets the roughly 9x loss. The existing shared filter admits common
-  Cyrillic starts instead of combining the selective interior pairs available
-  inside each pattern.
+  explored the roughly 9x multi-pattern loss.
 - [Compile dispersed width-stable Unicode byte probes](https://app.perfloop.ai/t/oss/case_b2m0dmh5wa)
-  targets the two single-pattern losses by rejecting more survivors before
-  decoded confirmation.
+  explored the two single-pattern losses.
 - [Compile width-stable Unicode byte confirmations](https://app.perfloop.ai/t/oss/case_tgkp9bs0r6)
-  tests whether eligible literals can confirm survivors from compiled raw-byte
-  classes while preserving the complete decoded fallback.
+  explored compiled raw-byte confirmation.
+- [Carry the confirmed end into repeated matching](https://app.perfloop.ai/t/oss/case_1jg4we7k3s)
+  tested the narrower repeated-call explanation. The one-pass control and
+  repeated `Find` remained effectively tied on the worst row.
 
-A fourth Case, [Carry the confirmed end into repeated matching](https://app.perfloop.ai/t/oss/case_1jg4we7k3s),
-tested a narrower API explanation. Its measurements did not close the gap; the
-one-pass control and repeated `Find` remained effectively tied on the worst
-row.
+Two later Cases carry the surviving work:
+
+- [Keep N=1 confirmation inside the AVX-512 scan](https://app.perfloop.ai/t/oss/case_s8c41a1per)
+  is verified on one targeted false-survivor row. It moved
+  `x_vs_best` from `4.547` to `0.7328` over ten randomized pairs.
+  [PR #10](https://github.com/tsenart/casei/pull/10) remains open because that
+  result has not been reproduced across the complete board on both hosts.
+- [Replace the decoded transition loop with one raw-byte plan](https://app.perfloop.ai/t/oss/case_rmg4fdm3me)
+  is open. It targets the shared cost that remains after filtering: decoding a
+  surviving position, mapping it into the fold-token alphabet, and then
+  advancing the exact plan.
 
 Any change accepted into `casei` must beat all five Unicode-equivalent Rebar
 rows on Ice Lake and Sapphire Rapids, preserve the one-engine design and full
-correctness contract, and keep all 33 arena rows below 1.0 `x_vs_best`.
+correctness contract, and keep every current `BenchmarkBar` row below 1.0
+`x_vs_best`.
 
 ## Required next work
 
@@ -234,10 +240,10 @@ The next construction must:
 1. compile once and keep one package-owned plan;
 2. combine selective interior anchors from several patterns into one shared
    byte-level filter;
-3. replace hot-path rune-to-token map lookups with compiled classification where
-   the plan permits it;
-4. expose exact non-overlapping enumeration, tentatively `Matcher.Scan` or an
-   iterator, without introducing a second search engine; and
+3. replace hot-path rune-to-token map lookups with compiled raw-byte
+   transitions where the plan permits it;
+4. preserve exact non-overlapping enumeration through the same state machine;
+   and
 5. beat the fastest eligible entrant on all five Unicode-equivalent rows before
    any count-all performance claim is made.
 
