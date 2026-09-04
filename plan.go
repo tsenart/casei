@@ -303,8 +303,9 @@ type tripleFilter struct {
 	n      uint8
 
 	// shufti packs up to eight three-byte forms into six nibble-to-slot
-	// tables. It normalizes bit five conservatively, then the regular decoded
-	// plan transition decides every survivor.
+	// tables. Fold-marked ASCII positions add both exact cases; raw positions
+	// add only their exact byte. The regular decoded plan still decides every
+	// survivor.
 	shufti tripleShuftiFilter
 }
 
@@ -314,9 +315,9 @@ const tripleShuftiSlots = 8
 
 // tripleShuftiFilter is a single-group three-byte Shufti projection. Each
 // table maps one nibble to the set of triple slots that allow it. Intersecting
-// the six table results leaves a slot bit for a possible triple. The table is
-// deliberately conservative: normalizing bit five at every byte position can
-// admit extra candidates, but cannot omit a folded ASCII rendering.
+// the six table results leaves a slot bit for a possible triple. Fold-marked
+// ASCII bytes contribute their two cases; unmarked bytes contribute one raw
+// value, so the projection has the same predicate as the generic triple loop.
 //
 // The six consecutive 16-byte tables are consumed by tripleShuftiSkip64 via
 // VBROADCASTI32X4, which repeats each table in the four 128-bit VPSHUFB lanes.
@@ -341,25 +342,30 @@ func makeTripleShuftiFilter(filter tripleFilter) tripleShuftiFilter {
 	}
 
 	var out tripleShuftiFilter
+	add := func(lo, hi *[16]byte, value, bit byte) {
+		(*lo)[value&0x0f] |= bit
+		(*hi)[value>>4] |= bit
+	}
 	for i := range filter.n {
 		triple := filter.values[i]
-		first, second, third := triple.first|0x20, triple.second|0x20, triple.third|0x20
+		values := [3]byte{triple.first, triple.second, triple.third}
+		los := [3]*[16]byte{&out.firstLo, &out.secondLo, &out.thirdLo}
+		his := [3]*[16]byte{&out.firstHi, &out.secondHi, &out.thirdHi}
 		bit := byte(1 << uint(i))
-		out.firstLo[first&0x0f] |= bit
-		out.firstHi[first>>4] |= bit
-		out.secondLo[second&0x0f] |= bit
-		out.secondHi[second>>4] |= bit
-		out.thirdLo[third&0x0f] |= bit
-		out.thirdHi[third>>4] |= bit
+		for position, value := range values {
+			add(los[position], his[position], value, bit)
+			if triple.fold&(1<<uint(position)) != 0 {
+				// makeTripleFilter marks only one-byte ASCII letters. Their
+				// generic predicate accepts exactly these two values.
+				add(los[position], his[position], value^0x20, bit)
+			}
+		}
 	}
 	out.valid = 1
 	return out
 }
 
 func tripleShuftiAt(first, second, third byte, filter *tripleShuftiFilter) bool {
-	first |= 0x20
-	second |= 0x20
-	third |= 0x20
 	matches := filter.firstLo[first&0x0f] & filter.firstHi[first>>4]
 	matches &= filter.secondLo[second&0x0f] & filter.secondHi[second>>4]
 	matches &= filter.thirdLo[third&0x0f] & filter.thirdHi[third>>4]
@@ -1598,6 +1604,7 @@ func (p *searchPlan) finish(nextToken uint32) {
 		arrangeTripleMixed(&p.triples)
 		arrangeTripleASCIIUTF8(&p.triples)
 		arrangeTripleSharedPrefix(&p.triples)
+		p.triples.shufti = makeTripleShuftiFilter(p.triples)
 		p.filter = p.makeRootFilter(p.tripleRoots)
 	} else {
 		// A partial triple set cannot screen a root that it does not cover on a

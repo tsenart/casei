@@ -2312,9 +2312,9 @@ asciipairshortdone64:
 	RET
 
 // tripleShuftiSkip64 scans a bounded union of three-byte forms. Six nibble
-// tables assign every form a slot bit; after bit-five normalization, a lane is
-// a survivor only when all six lookups retain one common slot. The decoded
-// plan transition verifies the conservative result.
+// tables assign every form a slot bit; a lane is a survivor only when all six
+// lookups retain one common slot. The tables already encode exact ASCII cases,
+// and the decoded plan transition verifies the surviving result.
 TEXT ·tripleShuftiSkip64(SB), NOSPLIT, $0-32
 	MOVQ ptr+0(FP), AX
 	MOVQ n+8(FP), DX
@@ -2332,8 +2332,6 @@ TEXT ·tripleShuftiSkip64(SB), NOSPLIT, $0-32
 	VBROADCASTI32X4 80(SI), K1, Z6
 	MOVQ $0x0f0f0f0f0f0f0f0f, R8
 	VPBROADCASTB R8, K1, Z15
-	MOVQ $0x2020202020202020, R8
-	VPBROADCASTB R8, K1, Z16
 
 tripleshufloop64:
 	// Three overlapping source vectors describe the 64 candidate starts. The
@@ -2343,9 +2341,6 @@ tripleshufloop64:
 	VMOVDQU8 (AX), K1, Z0
 	VMOVDQU8 1(AX), K1, Z9
 	VMOVDQU8 2(AX), K1, Z10
-	VPORQ Z16, Z0, K1, Z0
-	VPORQ Z16, Z9, K1, Z9
-	VPORQ Z16, Z10, K1, Z10
 
 	// Form table indexes: low and high nibbles of each byte position.
 	VPANDQ Z15, Z0, K1, Z11

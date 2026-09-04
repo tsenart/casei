@@ -608,7 +608,7 @@ func filterSkipScalar(s string, at int, filter *rootFilter) int {
 
 // tripleShuftiSkipBytes evaluates the bounded multi-triple projection with
 // AVX-512 BW. It is entered only by the runtime-gated caller in tripleSkipBytes;
-// scalar tails retain the same conservative table predicate.
+// scalar tails retain the same exact table predicate.
 func tripleShuftiSkipBytes(s string, at int, filter *tripleShuftiFilter) int {
 	start := at
 	remaining := len(s) - at

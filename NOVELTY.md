@@ -1434,6 +1434,23 @@ Restricting either known filter to roots
 which the compiler proves cover an all-ASCII stream is a semantic guard for
 this package's Unicode contract, not a novel matching construction.
 
+The exact-case refinement keeps that same six-table transition but changes its
+admission predicate. A fold-marked ASCII slot records its two case bytes; an
+unmarked slot records only its raw byte. The six nibble lookups therefore retain
+slot correlation while matching the generic per-slot predicate exactly, rather
+than normalizing bit five in every input byte. This is a Shufti/Teddy table
+repacking, not a standalone novel construction. Its closest sources remain the
+Teddy/FDR masks and candidate-confirm transitions cited above.
+
+The falsifier is direct: enumerate all `256^3` triples for a legal 4--8-slot
+filter and compare the table predicate with the generic fold predicate, then
+compare first-stop positions at every vector alignment and tail. A mismatch,
+a lost ordinary match, or a malformed/Unicode/order/width differential closes
+the implementation. A route/stop counter and order-rotated `Matcher.Each`
+comparison additionally test whether the exact representation removes the
+normalized aliases on the target host; the result is not generalized to other
+hosts without their paired measurement.
+
 The N=1 repeated-byte route is likewise the established single rare-byte
 anchor from `CONTEXT.md` §3: a fixed unique byte avoids per-call sampling, then
 the same compiled plan confirms its complete literal. The mixed-fold hit and

@@ -495,8 +495,28 @@ func TestPairShuftiWithOneRoots(t *testing.T) {
 	}
 }
 
+func tripleGenericAt(first, second, third byte, filter *tripleFilter) bool {
+	for i := range filter.n {
+		triple := filter.values[i]
+		left, middle, right := first, second, third
+		if triple.fold&1 != 0 {
+			left |= 0x20
+		}
+		if triple.fold&2 != 0 {
+			middle |= 0x20
+		}
+		if triple.fold&4 != 0 {
+			right |= 0x20
+		}
+		if left == triple.first && middle == triple.second && right == triple.third {
+			return true
+		}
+	}
+	return false
+}
+
 func TestTripleShuftiSkip(t *testing.T) {
-	plan := newSearchPlan([]string{"щупальце", "kelvin", "zygomorphic", "ſecret", "Zq9xW", "grofse", "ΤΈΛΟΣ", "watchdog"})
+	plan := newSearchPlan([]string{"a@b", "c\\d", "e`f", "g|h", "i!j", "l?m", "щупальце"})
 	filter := &plan.asciiTriples
 	if !plan.asciiTriplesComplete || !filter.shufti.usable() {
 		t.Fatalf("mixed triple table was not compiled: complete=%t filter=%+v", plan.asciiTriplesComplete, filter)
@@ -504,9 +524,8 @@ func TestTripleShuftiSkip(t *testing.T) {
 
 	// Every literal triple rendering must remain a Shufti survivor. Toggle each
 	// folded ASCII byte too, then compare the table scan with the precise
-	// transition over randomized and vector-boundary inputs. The table may stop
-	// early because bit-five normalization is deliberately conservative; it may
-	// never pass a complete triple match.
+	// transition over randomized and vector-boundary inputs. The exact table
+	// must neither lose a generic survivor nor admit an alias.
 	for i := range filter.n {
 		triple := filter.values[i]
 		for form := 0; form < 8; form++ {
@@ -518,6 +537,22 @@ func TestTripleShuftiSkip(t *testing.T) {
 			}
 			if !tripleShuftiAt(bytes[0], bytes[1], bytes[2], &filter.shufti) {
 				t.Fatalf("triple %d form %x was lost", i, bytes)
+			}
+		}
+	}
+
+	// Enumerate the complete byte domain. The six nibble tables must implement
+	// exactly the same per-slot fold predicate as the generic triple loop,
+	// including punctuation and high-byte aliases that the old normalized table
+	// admitted before decoded confirmation.
+	for first := 0; first < 256; first++ {
+		for second := 0; second < 256; second++ {
+			for third := 0; third < 256; third++ {
+				generic := tripleGenericAt(byte(first), byte(second), byte(third), filter)
+				shufti := tripleShuftiAt(byte(first), byte(second), byte(third), &filter.shufti)
+				if shufti != generic {
+					t.Fatalf("predicate mismatch for %02x %02x %02x: shufti=%t generic=%t", first, second, third, shufti, generic)
+				}
 			}
 		}
 	}
@@ -540,20 +575,20 @@ func TestTripleShuftiSkip(t *testing.T) {
 				stream := string(streamBytes)
 				got := tripleShuftiSkipBytes(stream, 0, &filter.shufti)
 				want := tripleSkipScalar(stream, 0, filter)
-				if got > want {
-					t.Fatalf("triple %d form %d alignment %d: shufti skip=%d skips precise triple at %d", i, form, alignment, got, want)
+				if got != want {
+					t.Fatalf("triple %d form %d alignment %d: shufti skip=%d want precise triple at %d", i, form, alignment, got, want)
 				}
 			}
 		}
 	}
 
-	stream := strings.Repeat("x", 63) + "KeLvIn" + strings.Repeat("x", 63) +
-		"SeCrEt" + strings.Repeat("x", 63) + "WATCHDOG" + strings.Repeat("x", 193)
+	stream := strings.Repeat("x", 63) + "A@B" + strings.Repeat("x", 63) +
+		"G|H" + strings.Repeat("x", 63) + "I!J" + strings.Repeat("x", 193)
 	for at := range stream {
 		got := tripleShuftiSkipBytes(stream, at, &filter.shufti)
 		want := tripleSkipScalar(stream, at, filter)
-		if got > want {
-			t.Fatalf("at %d: shufti skip=%d skips precise triple at %d", at, got, want)
+		if got != want {
+			t.Fatalf("at %d: shufti skip=%d want precise triple at %d", at, got, want)
 		}
 	}
 
@@ -567,8 +602,46 @@ func TestTripleShuftiSkip(t *testing.T) {
 	for at := range stream {
 		got := tripleShuftiSkipBytes(stream, at, &filter.shufti)
 		want := tripleSkipScalar(stream, at, filter)
-		if got > want {
-			t.Fatalf("random at %d: shufti skip=%d skips precise triple at %d", at, got, want)
+		if got != want {
+			t.Fatalf("random at %d: shufti skip=%d want precise triple at %d", at, got, want)
+		}
+	}
+}
+
+func TestCompleteTripleShufti(t *testing.T) {
+	plan := newSearchPlan([]string{"kelvin", "zygomorphic", "ſecret", "Zq9xW", "grofse", "watchdog"})
+	filter := &plan.triples
+	if !plan.triplesComplete || !filter.shufti.usable() {
+		t.Fatalf("complete triple table was not compiled: complete=%t filter=%+v", plan.triplesComplete, filter)
+	}
+
+	for i := range filter.n {
+		triple := filter.values[i]
+		for form := 0; form < 8; form++ {
+			bytes := [3]byte{triple.first, triple.second, triple.third}
+			for at := range bytes {
+				if triple.fold&(1<<at) != 0 && form&(1<<at) != 0 {
+					bytes[at] ^= 0x20
+				}
+			}
+			if !tripleShuftiAt(bytes[0], bytes[1], bytes[2], &filter.shufti) {
+				t.Fatalf("triple %d form %x was lost", i, bytes)
+			}
+		}
+	}
+
+	state := uint32(7)
+	for i := 0; i < 100000; i++ {
+		state = state*1664525 + 1013904223
+		first := byte(state >> 24)
+		state = state*1664525 + 1013904223
+		second := byte(state >> 24)
+		state = state*1664525 + 1013904223
+		third := byte(state >> 24)
+		got := tripleShuftiAt(first, second, third, &filter.shufti)
+		want := tripleGenericAt(first, second, third, filter)
+		if got != want {
+			t.Fatalf("predicate mismatch for %02x %02x %02x: shufti=%t generic=%t", first, second, third, got, want)
 		}
 	}
 }

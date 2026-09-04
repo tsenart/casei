@@ -3,6 +3,7 @@
 package casei
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -241,5 +242,41 @@ func BenchmarkASCIIOnlyPartition(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {
 		asciiOnlyPartitionSink = IndexFold(haystack, needle)
+	}
+}
+
+func BenchmarkTripleShuftiEach(b *testing.B) {
+	base := tripleShuftiEachPatterns
+	haystack := tripleShuftiEachCorpus()
+	routeOrders := [3][]string{
+		{"generic", "normalized", "explicit"},
+		{"normalized", "explicit", "generic"},
+		{"explicit", "generic", "normalized"},
+	}
+	for rotation := range routeOrders {
+		patterns := make([]string, len(base))
+		for i := range patterns {
+			patterns[i] = base[(i+rotation)%len(base)]
+		}
+		wantPattern := (len(base) - rotation) % len(base)
+		for _, mode := range routeOrders[rotation] {
+			mode := mode
+			matcher := tripleShuftiProofMatcher(patterns, mode)
+			if !matcher.Each(haystack, tripleShuftiEachYield) ||
+				tripleShuftiEachSink.Start != len(haystack)-3 ||
+				tripleShuftiEachSink.Pattern != wantPattern ||
+				tripleShuftiEachSinkWidth != 3 {
+				b.Fatalf("%s rotation %d: Each = %+v width %d", mode, rotation, tripleShuftiEachSink, tripleShuftiEachSinkWidth)
+			}
+			b.Run(fmt.Sprintf("rotation%d/%s", rotation, mode), func(b *testing.B) {
+				b.SetBytes(int64(len(haystack)))
+				b.ReportAllocs()
+				for b.Loop() {
+					if !matcher.Each(haystack, tripleShuftiEachYield) {
+						b.Fatal("Each stopped unexpectedly")
+					}
+				}
+			})
+		}
 	}
 }

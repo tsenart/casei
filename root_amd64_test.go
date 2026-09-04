@@ -11,6 +11,56 @@ import (
 	"golang.org/x/sys/cpu"
 )
 
+func TestTripleShuftiExactRouteAndStops(t *testing.T) {
+	if runtimeVectorBits() != 512 {
+		t.Skip("AVX-512 triple Shufti route is disabled")
+	}
+	haystack := tripleShuftiEachCorpus()
+	base := tripleShuftiEachPatterns
+	type result struct {
+		match Match
+		width int
+	}
+	var explicitRoutes, normalizedStops, explicitStops uint64
+	for rotation := range 3 {
+		patterns := make([]string, len(base))
+		for i := range patterns {
+			patterns[i] = base[(i+rotation)%len(base)]
+		}
+		for _, mode := range []string{"generic", "normalized", "explicit"} {
+			matcher := tripleShuftiProofMatcher(patterns, mode)
+			var got []result
+			if !matcher.Each(haystack, func(match Match, width int) bool {
+				got = append(got, result{match: match, width: width})
+				return true
+			}) {
+				t.Fatalf("rotation %d %s: Each stopped", rotation, mode)
+			}
+			wantPattern := (len(base) - rotation) % len(base)
+			if len(got) != 1 || got[0].match.Start != len(haystack)-3 ||
+				got[0].match.Pattern != wantPattern || got[0].width != 3 {
+				t.Fatalf("rotation %d %s: got %+v", rotation, mode, got)
+			}
+			if mode == "normalized" {
+				counted := tripleShuftiProofCount(haystack, &matcher.plan.asciiTriples.shufti)
+				normalizedStops += counted.stops
+			}
+			if mode == "explicit" {
+				counted := tripleShuftiProofCount(haystack, &matcher.plan.asciiTriples.shufti)
+				if counted.routes == 0 {
+					t.Fatalf("rotation %d explicit route was not entered", rotation)
+				}
+				explicitRoutes += counted.routes
+				explicitStops += counted.stops
+			}
+		}
+	}
+	if explicitStops >= normalizedStops {
+		t.Fatalf("exact stops=%d, normalized stops=%d; exact route did not remove aliases", explicitStops, normalizedStops)
+	}
+	t.Logf("explicit route/stop counters: routes=%d stops=%d; normalized stops=%d", explicitRoutes, explicitStops, normalizedStops)
+}
+
 func TestLiteralSkipExact64MatchesModel(t *testing.T) {
 	if !cpu.X86.HasAVX512F || !cpu.X86.HasAVX512BW {
 		t.Skip("AVX-512 BW exact-byte path is disabled")
