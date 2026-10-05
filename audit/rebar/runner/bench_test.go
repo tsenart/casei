@@ -113,3 +113,35 @@ func BenchmarkRebar(b *testing.B) {
 		})
 	}
 }
+
+// BenchmarkSixPatternCountSpans is a separate boundary guard for the bounded
+// six-to-eight-pattern bucket extension. It uses the pinned Sherlock corpus and
+// the same retained-Matcher count-spans operation, but is not a Rebar row or a
+// field-ratio result.
+func BenchmarkSixPatternCountSpans(b *testing.B) {
+	dir := os.Getenv("CASEI_REBAR_HAYSTACKS")
+	if dir == "" {
+		dir = filepath.Join("..", "haystacks")
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "sherlock.txt"))
+	if err != nil {
+		b.Fatalf("six-pattern guard haystack: %v (fetch with audit/rebar/haystacks.sh and set CASEI_REBAR_HAYSTACKS)", err)
+	}
+	haystack := string(raw)
+	patterns := []string{"Sherlock", "Sailor", "Kelvin", "Kettle", "Irene", "India"}
+	matcher := casei.NewMatcher(patterns)
+	want, err := verifyEnumeration(haystack, patterns, matcher, true)
+	if err != nil {
+		b.Fatalf("six-pattern guard preflight: %v", err)
+	}
+	if want != 968 {
+		b.Fatalf("six-pattern guard preflight spans=%d, want 968", want)
+	}
+	if got := countMatches(haystack, matcher, true); got != want {
+		b.Fatalf("six-pattern guard count-spans = %d, preflight expects %d", got, want)
+	}
+	b.SetBytes(int64(len(haystack)))
+	for b.Loop() {
+		benchSink = countMatches(haystack, matcher, true)
+	}
+}

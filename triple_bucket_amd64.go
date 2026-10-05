@@ -53,19 +53,69 @@ func addTripleBucketPrefix(prefixes *[tripleShuftiSlots]tripleBucketPrefix, n *i
 	return true
 }
 
-// makeTripleBucketFilter compiles ASCII-only prefixes for plans whose complete
-// triple union already has a Shufti projection for high-byte blocks. Each bucket
-// bit names one trie prefix. A three-unit terminal leaves the fourth byte
-// unconstrained; any live fourth-unit prefix is retained even when later units
-// require Unicode. The block kernel uses this table only when the four
-// overlapping input vectors are all ASCII; other blocks use the Shufti
-// projection. The shared plan remains the only match authority.
-func (p *searchPlan) makeTripleBucketFilter() bool {
-	if p.patternCount <= 1 || p.rootKind != rootGeneric || p.rawByteMulti.usable() ||
-		!p.triples.shufti.usable() || !asciiPairVBMIEnabled() {
-		return false
+// makeTripleSharedShuftiFilter conservatively packs more than eight forms into
+// the existing eight Shufti slots. Forms sharing a slot union their allowed
+// bytes at each position, so the projection can nominate extra triples but
+// cannot hide a stored form. The exact plan still decides every survivor.
+func makeTripleSharedShuftiFilter(filter tripleFilter) tripleShuftiFilter {
+	if filter.n <= tripleShuftiSlots || int(filter.n) > len(filter.values) {
+		return tripleShuftiFilter{}
 	}
 
+	var ordered [len(filter.values)]rootTriple
+	copy(ordered[:], filter.values[:filter.n])
+	// makeTripleFilter walks maps, so raw form order is not stable between
+	// Matcher compilations. Pairing sorted forms makes the conservative slot
+	// groups stable as well as bounded.
+	for i := 1; i < int(filter.n); i++ {
+		triple := ordered[i]
+		j := i
+		for j > 0 && rootTripleLess(triple, ordered[j-1]) {
+			ordered[j] = ordered[j-1]
+			j--
+		}
+		ordered[j] = triple
+	}
+
+	var out tripleShuftiFilter
+	add := func(lo, hi *[16]byte, value, bit byte) {
+		(*lo)[value&0x0f] |= bit
+		(*hi)[value>>4] |= bit
+	}
+	for i := 0; i < int(filter.n); i++ {
+		triple := ordered[i]
+		bit := byte(1 << uint(i%tripleShuftiSlots))
+		values := [3]byte{triple.first, triple.second, triple.third}
+		los := [3]*[16]byte{&out.firstLo, &out.secondLo, &out.thirdLo}
+		his := [3]*[16]byte{&out.firstHi, &out.secondHi, &out.thirdHi}
+		for position, value := range values {
+			add(los[position], his[position], value, bit)
+			if triple.fold&(1<<uint(position)) != 0 {
+				add(los[position], his[position], value^0x20, bit)
+			}
+		}
+	}
+	out.valid = 1
+	return out
+}
+
+func rootTripleLess(a, b rootTriple) bool {
+	if a.first != b.first {
+		return a.first < b.first
+	}
+	if a.second != b.second {
+		return a.second < b.second
+	}
+	if a.third != b.third {
+		return a.third < b.third
+	}
+	return a.fold < b.fold
+}
+
+// collectTripleBucketPrefixes derives the bounded ASCII paths which the bucket
+// may nominate. It does not alter the plan; callers can reject overflow without
+// installing either the bucket or its high-byte projection.
+func (p *searchPlan) collectTripleBucketPrefixes() ([tripleShuftiSlots]tripleBucketPrefix, int, bool) {
 	var prefixes [tripleShuftiSlots]tripleBucketPrefix
 	n := 0
 	var path [tripleBucketPrefixBytes]uint32
@@ -87,7 +137,7 @@ func (p *searchPlan) makeTripleBucketFilter() bool {
 				node2 := &p.nodes[state2]
 				if node2.output.pattern >= 0 && node2.output.units == 3 {
 					if !addTripleBucketPrefix(&prefixes, &n, path, 3) {
-						return false
+						return prefixes, n, false
 					}
 				}
 				for token3, state3 := range node2.edges {
@@ -98,15 +148,46 @@ func (p *searchPlan) makeTripleBucketFilter() bool {
 					if (node3.output.pattern >= 0 && node3.output.units == 4) || len(node3.edges) != 0 {
 						path[3] = token3
 						if !addTripleBucketPrefix(&prefixes, &n, path, 4) {
-							return false
+							return prefixes, n, false
 						}
 					}
 				}
 			}
 		}
 	}
-	if n == 0 {
+	return prefixes, n, true
+}
+
+// makeTripleBucketFilter compiles bounded ASCII-only trie prefixes. Each bucket
+// bit names one prefix. A three-unit terminal leaves the fourth byte
+// unconstrained; any live fourth-unit prefix is retained even when later units
+// require Unicode. Existing exact Shufti tables handle high-byte blocks. For a
+// complete six-to-eight-pattern union with more than eight raw forms, build a
+// shared-slot conservative Shufti projection only after prefix collection fits.
+// The bucket kernel uses its table only when all four overlapping input vectors
+// are ASCII; high-byte blocks use the Shufti projection. The shared plan remains
+// the only match authority.
+func (p *searchPlan) makeTripleBucketFilter() bool {
+	if p.patternCount <= 1 || p.rootKind != rootGeneric || p.rawByteMulti.usable() ||
+		!p.triplesComplete || !asciiPairVBMIEnabled() {
 		return false
+	}
+
+	sharedShufti := !p.triples.shufti.usable()
+	if sharedShufti && (p.patternCount < 6 || p.patternCount > 8 || p.triples.n <= tripleShuftiSlots) {
+		return false
+	}
+	prefixes, n, ok := p.collectTripleBucketPrefixes()
+	if !ok || n == 0 {
+		return false
+	}
+
+	shufti := p.triples.shufti
+	if sharedShufti {
+		shufti = makeTripleSharedShuftiFilter(p.triples)
+		if !shufti.usable() {
+			return false
+		}
 	}
 
 	storage := make([]byte, tripleBucketFilterBytes)
@@ -128,6 +209,7 @@ func (p *searchPlan) makeTripleBucketFilter() bool {
 	}
 	out[tripleBucketTableBytes] = byte(n)
 	out[tripleBucketFilterBytes-1] = tripleBucketValidMarker
+	p.triples.shufti = shufti
 	p.tripleRoots = storage
 	return true
 }

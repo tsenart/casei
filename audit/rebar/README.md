@@ -74,6 +74,13 @@ each arm's binary measures that arm's own `casei` source. Without
 current directory. Under `go test` in the runner directory, that is
 `audit/rebar/haystacks`.
 
+`BenchmarkSixPatternCountSpans` is a separate boundary guard, not a nineteenth
+Rebar row or a field ratio. It retains a six-literal Matcher over the pinned
+Sherlock fixture, preflights every match with `verifyEnumeration`, and times the
+same count-spans `countMatches` operation. Its literal set is
+`Sherlock`, `Sailor`, `Kelvin`, `Kettle`, `Irene`, and `India`, which compiles to
+nine raw root triples and six ASCII prefixes.
+
 ## Verify the record
 
 Verify the checked-in record from any directory:

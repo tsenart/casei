@@ -5,6 +5,7 @@ package casei
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -23,6 +24,7 @@ func tripleBucketRebarRows(t *testing.T) []tripleBucketRebarRow {
 		"curated/02-literal-alternate/sherlock-casei-en":     true,
 		"curated/02-literal-alternate/sherlock-casei-ru":     true,
 		"imported/leipzig/tom-sawyer-huckle-fin-insensitive": true,
+		"imported/sherlock/name-alt3-casei":                  true,
 		"imported/sherlock/name-alt5-casei":                  true,
 	}
 	data, err := os.ReadFile("audit/rebar/runner/testdata/rows.tsv")
@@ -125,6 +127,34 @@ func TestTripleBucketRebarEvidence(t *testing.T) {
 		}
 
 		switch row.id {
+		case "imported/sherlock/name-alt3-casei":
+			bucket := matcher.plan.tripleBucketFilter()
+			if matcher.plan.patternCount != 7 || matcher.plan.triples.n != 9 || !matcher.plan.triplesComplete ||
+				matcher.plan.rawByteMulti.usable() || !bucket.usable() || bucket.prefixCount() != 7 ||
+				!matcher.plan.triples.shufti.usable() {
+				t.Fatalf("seven-name route is not the bounded shared bucket: forms=%d bucket=%v prefixes=%d shufti=%v",
+					matcher.plan.triples.n, bucket.usable(), bucket.prefixCount(), matcher.plan.triples.shufti.usable())
+			}
+			if _, ok := matcher.plan.rootBucketEachFilter(string(haystack)); ok {
+				t.Fatal("seven-name Rebar Each selected the existing four/five-pattern root iterator")
+			}
+			baselinePlan := *matcher.plan
+			baselinePlan.tripleRoots = nil
+			baselinePlan.triples.shufti = tripleShuftiFilter{}
+			baseline := &Matcher{patterns: matcher.patterns, plan: &baselinePlan}
+			gotMatches, gotWidths, gotComplete := collectTripleBucketEach(matcher, string(haystack))
+			wantMatches, wantWidths, wantComplete := collectTripleBucketEach(baseline, string(haystack))
+			if gotComplete != wantComplete || !reflect.DeepEqual(gotMatches, wantMatches) || !reflect.DeepEqual(gotWidths, wantWidths) {
+				t.Fatalf("name-alt3 bucket differs from the baseline per-form plan: bucket=%+v/%v generic=%+v/%v",
+					gotMatches, gotWidths, wantMatches, wantWidths)
+			}
+			bucketStops := tripleBucketRebarStops(string(haystack), matcher.plan)
+			genericStops := tripleBucketRebarStops(string(haystack), &baselinePlan)
+			if bucketStops >= genericStops {
+				t.Fatalf("name-alt3 bucket stops=%d did not reduce baseline per-form stops=%d", bucketStops, genericStops)
+			}
+			t.Logf("%s: bucket prefixes=%d, bucket stops=%d, baseline per-form stops=%d, exact Each matches=%d, width bytes=%d",
+				row.id, bucket.prefixCount(), bucketStops, genericStops, matches, widthBytes)
 		case "curated/02-literal-alternate/sherlock-casei-en",
 			"imported/leipzig/tom-sawyer-huckle-fin-insensitive",
 			"imported/sherlock/name-alt5-casei":

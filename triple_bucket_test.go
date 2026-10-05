@@ -23,6 +23,42 @@ var tripleBucketTestPatterns = []string{
 	"Professor Moriarty",
 }
 
+var tripleBucketSevenNamePatterns = []string{
+	"Sherlock", "Holmes", "Watson", "Irene", "Adler", "John", "Baker",
+}
+
+var tripleBucketSixNamePatterns = []string{
+	"Sherlock", "Sailor", "Kelvin", "Kettle", "Irene", "India",
+}
+
+var tripleBucketEightHitPatterns = []string{
+	"fatal panic", "segfault detected", "oom killed", "disk full",
+	"Payment Declined", "quota exceeded", "handshake failed", "watchdog fired",
+}
+
+var tripleBucketEightLogPatterns = []string{
+	"Zq000xW vK", "Zq001xW vK", "Zq002xW vK", "Zq003xW vK",
+	"Zq004xW vK", "Zq005xW vK", "Zq006xW vK", "Zq007xW vK",
+}
+
+var tripleBucketEightRussianPatterns = []string{
+	"щупальце0", "щупальце1", "щупальце2", "щупальце3",
+	"щупальце4", "щупальце5", "щупальце6", "щупальце7",
+}
+
+var tripleBucketEightHazardPatterns = []string{
+	"щупальце", "kelvin", "zygomorphic", "ſecret",
+	"Zq9xW", "grofse", "ΤΈΛΟΣ", "watchdog",
+}
+
+var tripleBucketSixCompletePatterns = []string{
+	"kelvin", "zygomorphic", "ſecret", "Zq9xW", "grofse", "watchdog",
+}
+
+var tripleBucketTiePatterns = []string{
+	"Sherlock Holmes", "Sherlock", "Holmes", "Watson", "Irene", "Adler", "John", "Baker",
+}
+
 func tripleBucketTestMatcher(patterns []string, enabled bool) *Matcher {
 	base := NewMatcher(patterns)
 	if base.plan.rawByteMulti.usable() {
@@ -31,6 +67,7 @@ func tripleBucketTestMatcher(patterns []string, enabled bool) *Matcher {
 	plan := *base.plan
 	if !enabled {
 		plan.tripleRoots = nil
+		plan.triples.shufti = tripleShuftiFilter{}
 	}
 	return &Matcher{patterns: base.patterns, plan: &plan}
 }
@@ -68,6 +105,9 @@ func TestTripleBucketCompilerMatchesTrieModel(t *testing.T) {
 	plans := []*searchPlan{
 		NewMatcher([]string{"Sherlock Holmes", "John Watson", "Irene Adler", "Inspector Lestrade", "Professor Moriarty"}).plan,
 		NewMatcher([]string{"Tom", "Sawyer", "Huckleberry", "Finn"}).plan,
+		NewMatcher(tripleBucketSevenNamePatterns).plan,
+		NewMatcher(tripleBucketSixNamePatterns).plan,
+		NewMatcher(tripleBucketEightHitPatterns).plan,
 	}
 	if !asciiPairVBMIEnabled() {
 		t.Skip("AVX-512 VBMI bucket path is disabled")
@@ -124,37 +164,173 @@ func TestTripleBucketPlanEligibility(t *testing.T) {
 	})
 	leipzig := NewMatcher([]string{"Tom", "Sawyer", "Huckleberry", "Finn"})
 	russian := NewMatcher([]string{"Шерлок Холмс", "Джон Уотсон", "Ирен Адлер", "инспектор Лестрейд", "профессор Мориарти"})
+	russianEight := NewMatcher(tripleBucketEightRussianPatterns)
+	hazardEight := NewMatcher(tripleBucketEightHazardPatterns)
+	logEight := NewMatcher(tripleBucketEightLogPatterns)
 	single := NewMatcher([]string{"Sherlock Holmes"})
+	seven := NewMatcher(tripleBucketSevenNamePatterns)
+	six := NewMatcher(tripleBucketSixNamePatterns)
+	eightHit := NewMatcher(tripleBucketEightHitPatterns)
+	ninePatterns := append(append([]string(nil), tripleBucketSevenNamePatterns...), "Sherlock Holmes", "Moriarty")
+	nine := NewMatcher(ninePatterns)
+	eightComplete := NewMatcher(tripleBucketSixCompletePatterns)
 
 	if !english.plan.triplesComplete || !english.plan.triples.shufti.usable() ||
 		!leipzig.plan.triplesComplete || !leipzig.plan.triples.shufti.usable() {
-		t.Fatal("target plans no longer use the complete triple-Shufti owner")
+		t.Fatal("existing 4/5-name plans no longer use the complete triple-Shufti owner")
 	}
 	for _, plan := range []*searchPlan{english.plan, leipzig.plan} {
 		if plan.rawByteMulti.usable() || plan.asciiPairAnchors.usable() || plan.unicodePairN != 0 ||
 			plan.unicodeAnchor.n != 0 || plan.asciiProbe.usable() || plan.asciiOnly || plan.asciiRun {
-			t.Fatal("target consumer no longer reaches the complete multi-triple plan route")
+			t.Fatal("existing 4/5-name consumer no longer reaches the complete multi-triple plan route")
 		}
 	}
 	if !russian.plan.rawByteMulti.usable() {
 		t.Fatal("Russian Rebar counterpart no longer uses its retained raw multi-anchor owner")
 	}
+	if !seven.plan.triplesComplete || seven.plan.triples.n != 9 || seven.plan.rawByteMulti.usable() ||
+		seven.plan.rootKind != rootGeneric || !six.plan.triplesComplete || six.plan.triples.n != 9 ||
+		six.plan.rootKind != rootGeneric || !eightHit.plan.triplesComplete || eightHit.plan.triples.n != 10 ||
+		eightHit.plan.rootKind != rootGeneric {
+		t.Fatalf("six-to-eight-pattern eligibility drifted: seven=%d/%v/%v six=%d/%v eight=%d/%v",
+			seven.plan.triples.n, seven.plan.triplesComplete, seven.plan.rawByteMulti.usable(),
+			six.plan.triples.n, six.plan.triplesComplete, eightHit.plan.triples.n, eightHit.plan.triplesComplete)
+	}
+	if eightComplete.plan.triples.n != tripleShuftiSlots || !eightComplete.plan.triples.shufti.usable() {
+		t.Fatal("six-pattern eight-form control no longer uses its existing exact Shufti table")
+	}
+	if nine.plan.patternCount != 9 || !nine.plan.triplesComplete || nine.plan.triples.n <= tripleShuftiSlots ||
+		nine.plan.rawByteMulti.usable() || nine.plan.triples.shufti.usable() || nine.plan.tripleBucketFilter().usable() {
+		t.Fatal("shared-slot coverage escaped the six-to-eight-pattern limit")
+	}
+	if russianEight.plan.tripleBucketFilter() != nil || russianEight.plan.triples.shufti.usable() ||
+		hazardEight.plan.tripleBucketFilter() != nil || hazardEight.plan.triplesComplete ||
+		hazardEight.plan.triples.shufti.usable() || logEight.plan.tripleBucketFilter() != nil ||
+		logEight.plan.rootKind == rootGeneric {
+		t.Fatal("unaffected eight-pattern benchmark plan installed the shared bucket projection")
+	}
+	if _, ok := seven.plan.rootBucketEachFilter(strings.Repeat("x", rootBucketEachMinBytes)); ok {
+		t.Fatal("seven-name Matcher.Each crossed the existing four/five-pattern root eligibility gate")
+	}
+
 	if !asciiPairVBMIEnabled() {
-		if english.plan.tripleBucketFilter() != nil || leipzig.plan.tripleBucketFilter() != nil {
-			t.Fatal("bucket compiled without runtime AVX-512 VBMI")
+		for _, plan := range []*searchPlan{english.plan, leipzig.plan, seven.plan, six.plan, eightHit.plan} {
+			if plan.tripleBucketFilter() != nil {
+				t.Fatal("bucket compiled without runtime AVX-512 VBMI")
+			}
+		}
+		if seven.plan.triples.shufti.usable() || six.plan.triples.shufti.usable() || eightHit.plan.triples.shufti.usable() {
+			t.Fatal("shared-slot Shufti projection compiled without runtime AVX-512 VBMI")
 		}
 		t.Skip("plan-owned bucket is runtime-gated to AVX-512 VBMI")
 	}
-	englishBucket := english.plan.tripleBucketFilter()
-	if !englishBucket.usable() || englishBucket.prefixCount() != 5 {
-		t.Fatalf("English bucket prefixes=%d, want five", englishBucket.prefixCount())
+
+	for _, tc := range []struct {
+		name     string
+		plan     *searchPlan
+		forms    int
+		prefixes int
+	}{
+		{"English five-name", english.plan, 0, 5},
+		{"Leipzig four-name", leipzig.plan, 0, 4},
+		{"Sherlock seven-name", seven.plan, 9, 7},
+		{"six-name boundary", six.plan, 9, 6},
+		{"BenchmarkBar eight-name hit", eightHit.plan, 10, 8},
+	} {
+		bucket := tc.plan.tripleBucketFilter()
+		if !bucket.usable() || bucket.prefixCount() != tc.prefixes || !tc.plan.triples.shufti.usable() {
+			t.Fatalf("%s bucket=%v prefixes=%d shufti=%v; want %d prefixes and a Shufti fallback",
+				tc.name, bucket.usable(), bucket.prefixCount(), tc.plan.triples.shufti.usable(), tc.prefixes)
+		}
+		if tc.forms != 0 && int(tc.plan.triples.n) != tc.forms {
+			t.Fatalf("%s raw forms=%d, want %d", tc.name, tc.plan.triples.n, tc.forms)
+		}
 	}
-	leipzigBucket := leipzig.plan.tripleBucketFilter()
-	if !leipzigBucket.usable() || leipzigBucket.prefixCount() != 4 {
-		t.Fatalf("Leipzig bucket prefixes=%d, want four", leipzigBucket.prefixCount())
-	}
-	if russian.plan.tripleBucketFilter() != nil || single.plan.tripleBucketFilter() != nil {
+	if russian.plan.tripleBucketFilter() != nil || russianEight.plan.tripleBucketFilter() != nil ||
+		single.plan.tripleBucketFilter() != nil {
 		t.Fatal("bucket escaped the complete multi-literal plan boundary")
+	}
+}
+
+func TestTripleSharedShuftiContainsStoredForms(t *testing.T) {
+	plan := NewMatcher(tripleBucketSevenNamePatterns).plan
+	if plan.triples.n <= tripleShuftiSlots {
+		t.Fatalf("target raw forms=%d, need more than %d to exercise shared slots", plan.triples.n, tripleShuftiSlots)
+	}
+	shared := makeTripleSharedShuftiFilter(plan.triples)
+	if !shared.usable() {
+		t.Fatal("shared-slot projection was not built")
+	}
+	for i := 0; i < int(plan.triples.n); i++ {
+		triple := plan.triples.values[i]
+		for variant := 0; variant < 1<<3; variant++ {
+			if variant&^int(triple.fold) != 0 {
+				continue
+			}
+			values := [3]byte{triple.first, triple.second, triple.third}
+			for position := range values {
+				if variant&(1<<position) != 0 {
+					values[position] ^= 0x20
+				}
+			}
+			if !tripleShuftiAt(values[0], values[1], values[2], &shared) {
+				t.Fatalf("shared projection omitted form %d variant %03b: % x", i, variant, values)
+			}
+		}
+	}
+
+	reversed := plan.triples
+	for left, right := 0, int(reversed.n)-1; left < right; left, right = left+1, right-1 {
+		reversed.values[left], reversed.values[right] = reversed.values[right], reversed.values[left]
+	}
+	if got := makeTripleSharedShuftiFilter(reversed); got != shared {
+		t.Fatal("shared-slot projection depends on nondeterministic raw-form order")
+	}
+}
+
+func TestTripleBucketRejectsPrefixOverflowWithoutInstalling(t *testing.T) {
+	if !asciiPairVBMIEnabled() {
+		t.Skip("prefix-overflow installation test requires the AVX-512 VBMI compiler gate")
+	}
+	plan := &searchPlan{
+		patternCount:    7,
+		rootKind:        rootGeneric,
+		triplesComplete: true,
+		triples:         tripleFilter{n: tripleShuftiSlots + 1},
+		tripleRoots:     []byte{1, 0, 1},
+		nodes:           []planNode{{output: planOutput{pattern: -1}}},
+	}
+	const second, third, fourth uint32 = 10, 11, 12
+	plan.ascii['!'], plan.ascii['#'], plan.ascii['$'] = second, third, fourth
+	for i := 0; i < tripleShuftiSlots+1; i++ {
+		first := uint32(i + 1)
+		plan.ascii['A'+i] = first
+		state1 := len(plan.nodes)
+		plan.nodes = append(plan.nodes, planNode{output: planOutput{pattern: -1}})
+		state2 := len(plan.nodes)
+		plan.nodes = append(plan.nodes, planNode{output: planOutput{pattern: -1}})
+		state3 := len(plan.nodes)
+		plan.nodes = append(plan.nodes, planNode{output: planOutput{pattern: -1}})
+		state4 := len(plan.nodes)
+		plan.nodes = append(plan.nodes, planNode{output: planOutput{pattern: i, units: 4}})
+		if plan.nodes[0].edges == nil {
+			plan.nodes[0].edges = make(map[uint32]int)
+		}
+		plan.nodes[0].edges[first] = state1
+		plan.nodes[state1].edges = map[uint32]int{second: state2}
+		plan.nodes[state2].edges = map[uint32]int{third: state3}
+		plan.nodes[state3].edges = map[uint32]int{fourth: state4}
+	}
+	originalRoots := append([]byte(nil), plan.tripleRoots...)
+	_, prefixes, ok := plan.collectTripleBucketPrefixes()
+	if ok || prefixes != tripleShuftiSlots {
+		t.Fatalf("prefix collector returned ok=%v count=%d, want overflow after %d slots", ok, prefixes, tripleShuftiSlots)
+	}
+	if plan.makeTripleBucketFilter() {
+		t.Fatal("installed bucket when the bounded prefix set overflowed")
+	}
+	if plan.tripleBucketFilter() != nil || plan.triples.shufti.usable() || !reflect.DeepEqual(plan.tripleRoots, originalRoots) {
+		t.Fatal("prefix overflow partially installed a bucket or shared Shufti projection")
 	}
 }
 
@@ -208,6 +384,20 @@ func TestTripleBucketSkip64MatchesModel(t *testing.T) {
 			t.Fatalf("high byte at %d: skip=%d want %d", high, got, want)
 		}
 	}
+
+	sharedPlan := NewMatcher(tripleBucketSevenNamePatterns).plan
+	shared := sharedPlan.tripleBucketFilter()
+	if !shared.usable() || !sharedPlan.triples.shufti.usable() {
+		t.Fatal("seven-name plan has no shared-slot high-byte fallback")
+	}
+	for high := 0; high < 3*64+67; high++ {
+		input := []byte(strings.Repeat("x", 3*64+67))
+		input[high] = 0x80
+		want := tripleBucketSkip64Model(input, shared, &sharedPlan.triples.shufti)
+		if got := tripleBucketSkip64(unsafe.SliceData(input), len(input), unsafe.SliceData(shared[:tripleBucketTableBytes]), &sharedPlan.triples.shufti); got != want {
+			t.Fatalf("shared-Shufti high byte at %d: skip=%d want %d", high, got, want)
+		}
+	}
 }
 
 func collectTripleBucketEach(m *Matcher, haystack string) ([]Match, []int, bool) {
@@ -222,13 +412,14 @@ func collectTripleBucketEach(m *Matcher, haystack string) ([]Match, []int, bool)
 }
 
 func TestTripleBucketPreservesPlanResultsAndWidths(t *testing.T) {
-	fast := tripleBucketTestMatcher(tripleBucketTestPatterns, true)
-	shufti := tripleBucketTestMatcher(tripleBucketTestPatterns, false)
+	fast := tripleBucketTestMatcher(tripleBucketSevenNamePatterns, true)
+	generic := tripleBucketTestMatcher(tripleBucketSevenNamePatterns, false)
 	if !fast.plan.tripleBucketFilter().usable() {
 		t.Skip("AVX-512 VBMI bucket path is disabled")
 	}
-	if fast.plan.rawByteMulti.usable() {
-		t.Fatal("test plan unexpectedly bypasses the triple filter")
+	if fast.plan.rawByteMulti.usable() || fast.plan.triples.n <= tripleShuftiSlots ||
+		!fast.plan.triples.shufti.usable() {
+		t.Fatal("seven-name plan did not install shared Shufti behind its bucket")
 	}
 
 	malformed := append([]byte(strings.Repeat("x", 63)), 0xff)
@@ -245,14 +436,14 @@ func TestTripleBucketPreservesPlanResultsAndWidths(t *testing.T) {
 	}
 	for _, haystack := range haystacks {
 		gotFind, gotOK := fast.Find(haystack)
-		wantFind, wantOK := shufti.Find(haystack)
+		wantFind, wantOK := generic.Find(haystack)
 		if gotFind != wantFind || gotOK != wantOK {
-			t.Errorf("Find(%q): bucket=%+v,%v Shufti=%+v,%v", haystack, gotFind, gotOK, wantFind, wantOK)
+			t.Errorf("Find(%q): bucket=%+v,%v generic=%+v,%v", haystack, gotFind, gotOK, wantFind, wantOK)
 		}
 		gotMatches, gotWidths, gotComplete := collectTripleBucketEach(fast, haystack)
-		wantMatches, wantWidths, wantComplete := collectTripleBucketEach(shufti, haystack)
+		wantMatches, wantWidths, wantComplete := collectTripleBucketEach(generic, haystack)
 		if gotComplete != wantComplete || !reflect.DeepEqual(gotMatches, wantMatches) || !reflect.DeepEqual(gotWidths, wantWidths) {
-			t.Errorf("Each(%q): bucket=%+v/%v complete=%v Shufti=%+v/%v complete=%v", haystack, gotMatches, gotWidths, gotComplete, wantMatches, wantWidths, wantComplete)
+			t.Errorf("Each(%q): bucket=%+v/%v complete=%v generic=%+v/%v complete=%v", haystack, gotMatches, gotWidths, gotComplete, wantMatches, wantWidths, wantComplete)
 		}
 	}
 
@@ -266,16 +457,60 @@ func TestTripleBucketPreservesPlanResultsAndWidths(t *testing.T) {
 		first, firstWidth = match, width
 		return false
 	})
-	if first != (Match{Pattern: 0, Start: 63}) || firstWidth != len("ſherlock Holmes") {
-		t.Fatalf("width-changing simple fold = %+v width %d, want byte width %d", first, firstWidth, len("ſherlock Holmes"))
+	if first != (Match{Pattern: 0, Start: 63}) || firstWidth != len("ſherlock") {
+		t.Fatalf("width-changing simple fold = %+v width %d, want byte width %d", first, firstWidth, len("ſherlock"))
 	}
 	kelvin := strings.Repeat("x", 59) + "SherlocK Holmes"
 	fast.Each(kelvin, func(match Match, width int) bool {
-		if match != (Match{Pattern: 0, Start: 59}) || width != len("SherlocK Holmes") {
-			t.Fatalf("Kelvin source width = %+v width %d, want byte width %d", match, width, len("SherlocK Holmes"))
+		if match != (Match{Pattern: 0, Start: 59}) || width != len("SherlocK") {
+			t.Fatalf("Kelvin source width = %+v width %d, want byte width %d", match, width, len("SherlocK"))
 		}
 		return false
 	})
+}
+
+func TestTripleBucketKeepsLeftmostTiesAndEarlyStop(t *testing.T) {
+	fast := tripleBucketTestMatcher(tripleBucketTiePatterns, true)
+	generic := tripleBucketTestMatcher(tripleBucketTiePatterns, false)
+	if !fast.plan.tripleBucketFilter().usable() || fast.plan.triples.n <= tripleShuftiSlots {
+		t.Skip("the tie fixture does not select the shared-slot bucket")
+	}
+	for _, tc := range []struct {
+		haystack string
+		want     Match
+	}{
+		{strings.Repeat("x", 63) + "Sherlock Holmes", Match{Pattern: 0, Start: 63}},
+		{"Holmes xx Sherlock Holmes", Match{Pattern: 2, Start: 0}},
+	} {
+		got, gotOK := fast.Find(tc.haystack)
+		want, wantOK := generic.Find(tc.haystack)
+		if !gotOK || !wantOK || got != tc.want || want != tc.want {
+			t.Fatalf("Find(%q) = %+v,%v; generic=%+v,%v; want %+v",
+				tc.haystack, got, gotOK, want, wantOK, tc.want)
+		}
+		fastMatches, fastWidths, fastComplete := collectTripleBucketEach(fast, tc.haystack)
+		genericMatches, genericWidths, genericComplete := collectTripleBucketEach(generic, tc.haystack)
+		if fastComplete != genericComplete || !reflect.DeepEqual(fastMatches, genericMatches) ||
+			!reflect.DeepEqual(fastWidths, genericWidths) {
+			t.Fatalf("Each(%q) changed order or width: bucket=%+v/%v generic=%+v/%v",
+				tc.haystack, fastMatches, fastWidths, genericMatches, genericWidths)
+		}
+		var fastFirst, genericFirst Match
+		var fastWidth, genericWidth int
+		fastFinished := fast.Each(tc.haystack, func(match Match, width int) bool {
+			fastFirst, fastWidth = match, width
+			return false
+		})
+		genericFinished := generic.Each(tc.haystack, func(match Match, width int) bool {
+			genericFirst, genericWidth = match, width
+			return false
+		})
+		if fastFinished || genericFinished || fastFirst != genericFirst || fastWidth != genericWidth ||
+			fastFirst != tc.want {
+			t.Fatalf("early-stop Each(%q) = %+v/%d/%v, generic=%+v/%d/%v",
+				tc.haystack, fastFirst, fastWidth, fastFinished, genericFirst, genericWidth, genericFinished)
+		}
+	}
 }
 
 func TestTripleBucketNonASCIIRootByteSeams(t *testing.T) {
@@ -316,11 +551,11 @@ func TestTripleBucketFallsBackWithoutVBMI(t *testing.T) {
 	if !asciiPairVBMIEnabled() {
 		t.Skip("the runtime has no AVX-512 VBMI to disable")
 	}
-	fast := tripleBucketTestMatcher(tripleBucketTestPatterns, true)
+	fast := tripleBucketTestMatcher(tripleBucketSevenNamePatterns, true)
 	if !fast.plan.tripleBucketFilter().usable() {
 		t.Fatal("eligible plan did not compile its bucket")
 	}
-	want := tripleBucketTestMatcher(tripleBucketTestPatterns, false)
+	want := tripleBucketTestMatcher(tripleBucketSevenNamePatterns, false)
 	hadVBMI := cpu.X86.HasAVX512VBMI
 	cpu.X86.HasAVX512VBMI = false
 	defer func() { cpu.X86.HasAVX512VBMI = hadVBMI }()
@@ -340,5 +575,29 @@ func TestTripleBucketFallsBackWithoutVBMI(t *testing.T) {
 		if gotComplete != wantComplete || !reflect.DeepEqual(gotMatches, wantMatches) || !reflect.DeepEqual(gotWidths, wantWidths) {
 			t.Fatalf("VBMI-disabled Each(%q) differs: bucket=%+v/%v Shufti=%+v/%v", haystack, gotMatches, gotWidths, wantMatches, wantWidths)
 		}
+	}
+}
+
+func TestTripleBucketDoesNotCompileWithoutVBMI(t *testing.T) {
+	if !asciiPairVBMIEnabled() {
+		t.Skip("the runtime has no AVX-512 VBMI to disable")
+	}
+	hadVBMI := cpu.X86.HasAVX512VBMI
+	cpu.X86.HasAVX512VBMI = false
+	defer func() { cpu.X86.HasAVX512VBMI = hadVBMI }()
+
+	matcher := NewMatcher(tripleBucketSevenNamePatterns)
+	if matcher.plan.tripleBucketFilter().usable() || matcher.plan.triples.shufti.usable() {
+		t.Fatal("shared bucket state compiled while AVX-512 VBMI was disabled")
+	}
+	var got Match
+	var width int
+	complete := matcher.Each(strings.Repeat("x", 63)+"ſherlock Holmes", func(match Match, sourceWidth int) bool {
+		got, width = match, sourceWidth
+		return false
+	})
+	if complete || got != (Match{Pattern: 0, Start: 63}) || width != len("ſherlock") {
+		t.Fatalf("feature-off Each = (%+v, %d, complete=%v), want first long-s match at byte 63 with width %d",
+			got, width, complete, len("ſherlock"))
 	}
 }
