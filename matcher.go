@@ -2,10 +2,10 @@ package casei
 
 import "unicode/utf8"
 
-// Matcher searches for any of a set of patterns under the same Unicode
-// simple-fold semantics as IndexFold. IndexFold is the one-pattern form of the
-// same compiled search plan. The implementation scans the haystack once rather
-// than running one independent search per pattern.
+// Matcher searches for any of a fixed set of patterns. NewMatcher uses Unicode
+// simple folding, while NewExactMatcher compares raw bytes. IndexFold is the
+// one-pattern form of the folded compiled search plan. Searches use the shared
+// compiled automaton rather than running one independent search per pattern.
 //
 // Contract: Find returns the leftmost match by byte offset; ties at the
 // same offset go to the lowest pattern index (regexp alternation order).
@@ -18,17 +18,17 @@ type Match struct {
 }
 
 // Matcher searches for any of a fixed set of patterns. Construction compiles
-// their shared fold-orbit transition plan; Find returns one answer and Each
-// enumerates non-overlapping answers over the haystack.
+// an immutable plan; Find returns one answer and Each enumerates non-overlapping
+// answers over the haystack.
 type Matcher struct {
 	patterns       []string
 	plan           *searchPlan
 	asciiEachProbe *asciiProbe
 }
 
-// NewMatcher builds a Matcher over the given pattern set. The set is copied;
-// later mutation of the slice does not affect either the exposed pattern set
-// or the compiled plan.
+// NewMatcher builds a Matcher over the given pattern set using Unicode simple
+// folding. The set is copied; later mutation of the slice does not affect either
+// the exposed pattern set or the compiled plan.
 func NewMatcher(patterns []string) *Matcher {
 	p := make([]string, len(patterns))
 	copy(p, patterns)
@@ -38,6 +38,19 @@ func NewMatcher(patterns []string) *Matcher {
 		m.asciiEachProbe = plan.makeASCIIEachProbe(p[0])
 	}
 	return m
+}
+
+// NewExactMatcher builds a Matcher over the given pattern set using raw byte
+// equality. Matching is case-sensitive and may start or end at any byte offset,
+// including within a valid UTF-8 encoding. Find returns the earliest byte start,
+// with ties resolved by the lowest pattern index. Each consumes the matched
+// pattern's byte length; after an empty result it advances one byte through EOF.
+// The set is copied; later mutation of the slice does not affect the exposed
+// patterns or compiled plan.
+func NewExactMatcher(patterns []string) *Matcher {
+	p := make([]string, len(patterns))
+	copy(p, patterns)
+	return &Matcher{patterns: p, plan: newSearchPlan(p, true)}
 }
 
 // Patterns returns a copy of the pattern set.
@@ -58,9 +71,11 @@ func (m *Matcher) Find(haystack string) (Match, bool) {
 
 // Each calls yield for each non-overlapping match in haystack, in the same
 // leftmost and lowest-pattern-ID order as repeated calls to Find. width is the
-// exact byte width consumed by this occurrence, which can differ from the
-// matched pattern's byte length under Unicode simple folding. Returning false
-// from yield stops enumeration and makes Each return false.
+// exact byte width consumed by this occurrence. Under Unicode simple folding it
+// can differ from the pattern's byte length; an exact matcher consumes the
+// pattern's byte length. After an empty result, folded matchers advance by one
+// UTF-8 unit and exact matchers by one byte, until EOF. Returning false from
+// yield stops enumeration and makes Each return false.
 //
 // A nil Matcher or nil yield has no matches and returns true. Each is safe for
 // concurrent use when yield itself is safe.
@@ -68,16 +83,18 @@ func (m *Matcher) Each(haystack string, yield func(match Match, width int) bool)
 	if m == nil || m.plan == nil || yield == nil {
 		return true
 	}
-	if m.plan.empty < 0 && m.plan.rawByteMulti.usable() {
-		return m.plan.eachRawByteFixedAnchored(haystack, yield)
-	}
-	if bucket, ok := m.plan.rootBucketEachFilter(haystack); ok {
-		return m.plan.eachRootBucket(haystack, bucket, yield)
-	}
-	if m.plan.patternCount == 1 && m.plan.maxUnits > 0 && len(haystack) >= 4096 &&
-		!m.plan.opaqueContinuation && !m.plan.asciiRun && !m.plan.asciiPair.usable() &&
-		!m.plan.asciiStaticAnchor && !m.plan.asciiByteAnchor && m.plan.asciiProbe.usable() {
-		return m.eachASCIIProbe(haystack, yield)
+	if !m.plan.exact {
+		if m.plan.empty < 0 && m.plan.rawByteMulti.usable() {
+			return m.plan.eachRawByteFixedAnchored(haystack, yield)
+		}
+		if bucket, ok := m.plan.rootBucketEachFilter(haystack); ok {
+			return m.plan.eachRootBucket(haystack, bucket, yield)
+		}
+		if m.plan.patternCount == 1 && m.plan.maxUnits > 0 && len(haystack) >= 4096 &&
+			!m.plan.opaqueContinuation && !m.plan.asciiRun && !m.plan.asciiPair.usable() &&
+			!m.plan.asciiStaticAnchor && !m.plan.asciiByteAnchor && m.plan.asciiProbe.usable() {
+			return m.eachASCIIProbe(haystack, yield)
+		}
 	}
 	for at := 0; at <= len(haystack); {
 		match, width, ok := m.plan.findWithWidth(haystack[at:])
@@ -86,8 +103,12 @@ func (m *Matcher) Each(haystack string, yield func(match Match, width int) bool)
 		}
 		match.Start += at
 		if width == 0 {
-			units := utf8.RuneCountInString(m.patterns[match.Pattern])
-			width = matcherMatchEnd(haystack, match.Start, units) - match.Start
+			if m.plan.exact {
+				width = len(m.patterns[match.Pattern])
+			} else {
+				units := utf8.RuneCountInString(m.patterns[match.Pattern])
+				width = matcherMatchEnd(haystack, match.Start, units) - match.Start
+			}
 		}
 		end := match.Start + width
 		if !yield(match, width) {
@@ -100,8 +121,12 @@ func (m *Matcher) Each(haystack string, yield func(match Match, width int) bool)
 		if match.Start == len(haystack) {
 			return true
 		}
-		_, size := utf8.DecodeRuneInString(haystack[match.Start:])
-		at = match.Start + size
+		if m.plan.exact {
+			at = match.Start + 1
+		} else {
+			_, size := utf8.DecodeRuneInString(haystack[match.Start:])
+			at = match.Start + size
+		}
 	}
 	return true
 }

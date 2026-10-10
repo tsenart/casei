@@ -1,14 +1,19 @@
 # casei
 
 `casei` searches UTF-8 text for one literal or a compiled set under Unicode
-simple folding. It is built for hot paths such as log filters, deny lists,
-header checks, and keyword sets.
+simple folding. `NewExactMatcher` adds opt-in raw-byte matching for an exact
+substring or literal set.
 
-`IndexFold` returns the byte offset of one literal. A compiled `Matcher`
-returns the leftmost match from a whole set in one scan. Both use Unicode
-simple folding, the same case relation as Go's `regexp (?i)` on valid UTF-8.
+`IndexFold` returns the byte offset of one folded literal. A `Matcher` built by
+`NewMatcher` returns the leftmost folded match from a whole set in one scan;
+these APIs use the same simple-fold relation as Go's `regexp (?i)` on valid
+UTF-8. A `Matcher` built by `NewExactMatcher` compares bytes without folding.
 
 ## The result
+
+The performance results below cover the folded `IndexFold` and `NewMatcher`
+paths. `NewExactMatcher` adds a semantic capability; no exact-mode performance
+result is claimed here.
 
 The checked-in two-host acceptance snapshot covers the prior 36-row arena,
 measured on Intel Ice Lake and Sapphire Rapids with AVX-512F, BW, and VBMI.
@@ -154,40 +159,56 @@ if match, ok := m.Find(line); ok {
 	fmt.Println(m.Patterns()[match.Pattern], match.Start)
 }
 
-// Enumerate non-overlapping matches. Width is the number of source bytes
-// consumed by this occurrence, which can differ across a Unicode fold orbit.
+// Enumerate non-overlapping folded matches. Width is the number of source
+// bytes consumed, which can differ across a Unicode fold orbit.
 m.Each(log, func(match casei.Match, width int) bool {
 	fmt.Println(match.Pattern, match.Start, width)
 	return true
 })
+
+// Exact byte equality is opt-in. Case matters, and matches may start inside a
+// valid UTF-8 encoding.
+exact := casei.NewExactMatcher([]string{"UserID=", "Authorization:"})
+if match, ok := exact.Find(line); ok {
+	fmt.Println(exact.Patterns()[match.Pattern], match.Start)
+}
 ```
 
-`NewMatcher` compiles once. Reuse the matcher across searches. `Find` is safe
-for concurrent use. Search is allocation-free on the published paths after
-compilation. A generic plan with a longest pattern above the 256-entry inline
-ring may allocate an offset ring during search.
+`NewMatcher` and `NewExactMatcher` compile once. Reuse a matcher across
+searches. `Find` is safe for concurrent use. Search is allocation-free on the
+published paths after compilation. A generic plan with a longest pattern above
+the 256-entry inline ring may allocate an offset ring during search.
 
 The library requires Go 1.22 or newer. Rebuilding the native benchmark field
 requires Go 1.24 or newer.
 
 ## Semantics
 
-On valid UTF-8, matching follows Unicode simple folding:
+For `IndexFold` and `NewMatcher`, valid UTF-8 matching follows Unicode simple
+folding:
 
 - `k`, `K`, and Kelvin sign `K` match.
 - `s`, `S`, and long s `ſ` match.
 - `σ`, `ς`, and `Σ` match.
 - `ß` and `ẞ` match. `ß` and `ss` do not.
 
-Invalid UTF-8 bytes are opaque one-byte units. Results use source byte offsets.
-`Matcher.Find` returns the leftmost start, with ties resolved by the lowest
-pattern index. `Matcher.Each` emits non-overlapping matches in that order and
-returns the exact source width of each occurrence.
+For `IndexFold` and `NewMatcher`, invalid UTF-8 bytes are opaque one-byte units.
+Results use source byte offsets. `Matcher.Find` returns the leftmost start, with
+ties resolved by the lowest pattern index. `Matcher.Each` emits non-overlapping
+matches in that order and returns the exact source width of each occurrence.
 
-Correctness is checked against Go `regexp (?i)` by deterministic differential
-tests and two fuzz targets. The portable path, AVX2 path, and AVX-512 path run
-the same contract suite. Filter tests include exhaustive byte-pair projections,
-randomized tails, malformed input, width-changing folds, and ordering ties.
+`NewExactMatcher` compares raw bytes exactly, so case differences do not match.
+Patterns and haystacks may contain arbitrary bytes, and a match may start inside
+a valid UTF-8 encoding. `Find` returns the earliest byte start, with ties going
+to the lowest pattern index. `Each` emits non-overlapping results and consumes
+the selected pattern's byte length. After an empty result it advances one byte,
+even inside UTF-8, and can emit an empty match at EOF. These rules are opt-in
+and do not change the folded behavior of `NewMatcher` or `IndexFold`.
+
+The folded APIs are checked against Go `regexp (?i)` by deterministic
+differential tests and two fuzz targets. The portable, AVX2, and AVX-512 paths
+run the same folded contract suite. Exact matching is checked against a raw-byte
+oracle, including byte fragments, malformed input, and empty progress.
 
 ## How the field was measured
 
@@ -277,9 +298,9 @@ stay in the repo so the next attempt starts from evidence.
 - Published speed numbers cover x86-64 AVX-512F/BW/VBMI on Intel Ice Lake and
   Sapphire Rapids.
 - The portable path is scalar. ARM64 is correct, with no NEON speed claim.
-- The API searches literals and finite literal sets.
-- Folding is Unicode simple folding. Full-fold expansions such as `ß -> ss`
-  are outside the contract.
+- The API searches literals and finite literal sets. `NewMatcher` and `IndexFold`
+  use Unicode simple folding; `NewExactMatcher` uses raw-byte equality.
+- Full-fold expansions such as `ß -> ss` are outside the folded contract.
 - Plan compilation has a cost. Cache a matcher for repeated searches.
 - The current arena has 38 rows. Its sources, field, dispatch, failed
   measurements, and verifier are open and pinned. The checked-in acceptance

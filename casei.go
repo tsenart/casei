@@ -1,11 +1,13 @@
-// Package casei searches UTF-8 text case-insensitively under Unicode simple
-// case folding, with allocation-free hot paths after plan compilation.
+// Package casei searches UTF-8 text under Unicode simple folding and also
+// provides opt-in raw-byte exact matching, with allocation-free hot paths after
+// plan compilation.
 //
-// It answers two shapes of the same question. IndexFold finds one needle;
-// Matcher finds any of a pattern set and reports the leftmost match. Both run
-// one compiled search plan, with runtime-gated AVX-512 and AVX2 block
-// transitions on x86-64 and a portable path everywhere else, so results are
-// identical on every machine while throughput is not.
+// IndexFold finds one folded needle; NewMatcher finds a folded pattern set;
+// NewExactMatcher finds an exact-byte pattern set. Folded searches share one
+// compiled plan, with runtime-gated AVX-512 and AVX2 block transitions on x86-64
+// and a portable path everywhere else, so their results are identical on every
+// machine while throughput is not. Exact matchers use byte-identity tokens in
+// the same plan and report byte offsets.
 //
 // Reach for it when the alternative is lowercasing both sides and searching:
 // that idiom allocates two copies, shifts byte offsets, and is not the same
@@ -17,11 +19,11 @@
 //	if match, ok := m.Find(line); ok { use(match.Pattern, match.Start) }
 //
 // The repository around this package is also an open benchmark arena: its
-// tests define these semantics, arena/ measures this engine against the
+// tests define these semantics, arena/ measures the folded search paths against
 // competing implementations built from source, and CONTEXT.md catalogs the
 // known techniques.
 //
-// Semantics: Unicode simple case folding over UTF-8:
+// IndexFold and NewMatcher use Unicode simple case folding over UTF-8:
 //
 //   - Two code points match when they belong to the same simple case-folding
 //     orbit (unicode.SimpleFold). On valid UTF-8, this is exactly the matching
@@ -39,6 +41,11 @@
 //   - ASCII consequences: only the 52 ASCII letters fold within ASCII; the
 //     0x20-adjacent punctuation pairs ('[' vs '{', '@' vs '`', ']' vs '}',
 //     '\' vs '|', '^' vs '~') never match.
+//
+// NewExactMatcher instead compares raw bytes. It is case-sensitive, accepts
+// arbitrary string bytes, and may match at a byte inside a valid UTF-8 encoding.
+// Its Each width is the selected pattern's byte length. These rules do not
+// change IndexFold or NewMatcher.
 package casei
 
 // IndexFold returns the byte index of the first occurrence of needle in
