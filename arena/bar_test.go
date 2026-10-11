@@ -8,11 +8,12 @@ package arena_test
 
 import (
 	"fmt"
+	"math"
+	"slices"
 	"sort"
 	"testing"
 	"time"
 
-	veloz "github.com/mhr3/veloz/ascii"
 	"golang.org/x/sys/cpu"
 
 	"github.com/tsenart/casei"
@@ -22,17 +23,23 @@ import (
 	vectorscan "github.com/tsenart/casei/arena/vectorscan"
 )
 
-// timeWindow returns ns/op for one manually timed window. testing.Benchmark
-// cannot be nested inside a running benchmark.
-func timeWindow(op func()) float64 {
-	const budget = 25 * time.Millisecond
-	n := 0
+// windowBudget is the minimum length of one timing window.
+const windowBudget = 25 * time.Millisecond
+
+// timeWindow returns ns/op for one manually timed window of at least budget.
+// It runs op before it reads the clock, so a window always counts at least one
+// operation, and it ends only after the monotonic clock has advanced by budget
+// and by more than zero, so a window never divides by no time. A preempted
+// first check or a coarse clock therefore cannot produce an empty window.
+// testing.Benchmark cannot be nested inside a running benchmark.
+func timeWindow(op func(), budget time.Duration) float64 {
 	start := time.Now()
-	for time.Since(start) < budget {
+	for n := 1; ; n++ {
 		op()
-		n++
+		if elapsed := time.Since(start); elapsed >= budget && elapsed > 0 {
+			return float64(elapsed.Nanoseconds()) / float64(n)
+		}
 	}
-	return float64(time.Since(start).Nanoseconds()) / float64(n)
 }
 
 // pairedRatio measures the candidate beside one competitor six times, with
@@ -46,11 +53,11 @@ func pairedRatio(candidate, competitor func()) float64 {
 	for round := range ratios {
 		var candidateNS, competitorNS float64
 		if round%2 == 0 {
-			candidateNS = timeWindow(candidate)
-			competitorNS = timeWindow(competitor)
+			candidateNS = timeWindow(candidate, windowBudget)
+			competitorNS = timeWindow(competitor, windowBudget)
 		} else {
-			competitorNS = timeWindow(competitor)
-			candidateNS = timeWindow(candidate)
+			competitorNS = timeWindow(competitor, windowBudget)
+			candidateNS = timeWindow(candidate, windowBudget)
 		}
 		ratios[round] = candidateNS / competitorNS
 	}
@@ -75,7 +82,42 @@ func boolMetric(value bool) float64 {
 	return 0
 }
 
-func reportSingleDispatch(b *testing.B, s scenario) {
+// singleField returns the entrants that count toward x_vs_best on a
+// single-needle scenario: every exact implementation other than the candidate
+// whose tier covers the scenario. Every pinned entrant that supports a row is
+// timed; a dispatch width is a diagnostic and never removes an entrant.
+func singleField(s scenario) []impl {
+	var field []impl
+	for _, im := range impls {
+		if im.name != "candidate" && im.foldExact && im.supports(s) {
+			field = append(field, im)
+		}
+	}
+	return field
+}
+
+// benchSingle reports x_vs_best for one single-needle scenario: the candidate
+// paired with each entrant of singleField.
+func benchSingle(b *testing.B, s scenario) {
+	candidate := func() { sink = runSingleScenario(casei.IndexFold, s) }
+	field := singleField(s)
+	best := 0.0
+	for _, im := range field {
+		best = max(best, pairedRatio(candidate, func() { sink = runSingleScenario(im.index, s) }))
+	}
+	for b.Loop() {
+		candidate()
+	}
+	b.ReportMetric(best, "x_vs_best")
+	b.ReportMetric(float64(len(field)), "competitors")
+	b.ReportMetric(float64(len(field)+1), "entrants")
+	reportSingleDispatch(b, s, field)
+}
+
+func reportSingleDispatch(b *testing.B, s scenario, field []impl) {
+	active := func(name string) float64 {
+		return boolMetric(slices.ContainsFunc(field, func(im impl) bool { return im.name == name }))
+	}
 	vscan := vectorscanSingles[s.needle]
 	if vscan == nil {
 		panic(fmt.Sprintf("Vectorscan baseline was not compiled for %q", s.needle))
@@ -94,19 +136,21 @@ func reportSingleDispatch(b *testing.B, s scenario) {
 	}
 	b.ReportMetric(1, "candidate_active")
 	b.ReportMetric(float64(casei.NewMatcher([]string{s.needle}).VectorBits()), "candidate_vector_bits")
-	b.ReportMetric(1, "regexp_active")
+	b.ReportMetric(active("regexp"), "regexp_active")
 	b.ReportMetric(0, "regexp_vector_bits")
-	b.ReportMetric(1, "pcre2_active")
+	b.ReportMetric(active("pcre2-jit"), "pcre2_active")
 	b.ReportMetric(float64(pcre2jit.VectorBits()), "pcre2_vector_bits")
-	b.ReportMetric(1, "rure_active")
+	b.ReportMetric(active("rure"), "rure_active")
 	b.ReportMetric(float64(rureBits), "rure_vector_bits")
-	b.ReportMetric(1, "vectorscan_active")
+	b.ReportMetric(active("vectorscan"), "vectorscan_active")
 	b.ReportMetric(float64(vscan.VectorBits()), "vectorscan_vector_bits")
 	b.ReportMetric(boolMetric(vscan.HasVBMI()), "vectorscan_vbmi")
-	b.ReportMetric(boolMetric(stringZillaAvailable), "stringzilla_active")
+	b.ReportMetric(active("stringzilla"), "stringzilla_active")
 	b.ReportMetric(float64(stringZillaBits), "stringzilla_vector_bits")
-	b.ReportMetric(boolMetric(!s.utf8 && velozBits == 256), "veloz_active")
+	b.ReportMetric(active("veloz"), "veloz_active")
 	b.ReportMetric(float64(velozBits), "veloz_vector_bits")
+	b.ReportMetric(active("rustac"), "rustac_active")
+	b.ReportMetric(float64(rustACSingles[s.needle].VectorBits()), "rustac_vector_bits")
 }
 
 func reportMultiDispatch(b *testing.B, s multiScenario, candidateBits int, rure *rureRegex, rust *rustac.Matcher, vscan *vectorscan.Matcher) {
@@ -143,41 +187,7 @@ func reportMultiDispatch(b *testing.B, s multiScenario, candidateBits int, rure 
 // contract. It is a focused mechanism probe and is intentionally outside the
 // acceptance rows.
 func BenchmarkASCIIOnlyPartitionField(b *testing.B) {
-	s := asciiPartitionScenario
-	candidate := func() { sink = runSingleScenario(casei.IndexFold, s) }
-	best := pairedRatio(candidate, func() { sink = runSingleScenario(indexRegexp, s) })
-	competitors := 1
-	if ratio := pairedRatio(candidate, func() { sink = runSingleScenario(indexPCRE2, s) }); ratio > best {
-		best = ratio
-	}
-	competitors++
-	if ratio := pairedRatio(candidate, func() { sink = runSingleScenario(indexRure, s) }); ratio > best {
-		best = ratio
-	}
-	competitors++
-	if ratio := pairedRatio(candidate, func() { sink = runSingleScenario(indexVectorscan, s) }); ratio > best {
-		best = ratio
-	}
-	competitors++
-	if stringZillaAvailable {
-		if ratio := pairedRatio(candidate, func() { sink = runSingleScenario(indexStringZilla, s) }); ratio > best {
-			best = ratio
-		}
-		competitors++
-	}
-	if !s.utf8 && velozVectorBits() == 256 {
-		if ratio := pairedRatio(candidate, func() { sink = runSingleScenario(veloz.IndexFold, s) }); ratio > best {
-			best = ratio
-		}
-		competitors++
-	}
-	for b.Loop() {
-		candidate()
-	}
-	b.ReportMetric(best, "x_vs_best")
-	b.ReportMetric(float64(competitors), "competitors")
-	b.ReportMetric(float64(competitors+1), "entrants")
-	reportSingleDispatch(b, s)
+	benchSingle(b, asciiPartitionScenario)
 }
 
 // BenchmarkBar reports x_vs_best per scenario: candidate time relative to the
@@ -188,46 +198,7 @@ func BenchmarkASCIIOnlyPartitionField(b *testing.B) {
 func BenchmarkBar(b *testing.B) {
 	for _, s := range scenarios {
 		s := s
-		b.Run("single/"+s.name, func(b *testing.B) {
-			candidate := func() { sink = runSingleScenario(casei.IndexFold, s) }
-			best := pairedRatio(candidate, func() { sink = runSingleScenario(indexRegexp, s) })
-			competitors := 1
-			if ratio := pairedRatio(candidate, func() { sink = runSingleScenario(indexPCRE2, s) }); ratio > best {
-				best = ratio
-			}
-			competitors++
-			// Every pinned entrant that supports the row counts toward
-			// x_vs_best. The dispatch audit only sees memchr, while rust/regex
-			// often runs aho-corasick Teddy, so its width is a diagnostic and
-			// never removes the entrant.
-			if ratio := pairedRatio(candidate, func() { sink = runSingleScenario(indexRure, s) }); ratio > best {
-				best = ratio
-			}
-			competitors++
-			if ratio := pairedRatio(candidate, func() { sink = runSingleScenario(indexVectorscan, s) }); ratio > best {
-				best = ratio
-			}
-			competitors++
-			if stringZillaAvailable {
-				if ratio := pairedRatio(candidate, func() { sink = runSingleScenario(indexStringZilla, s) }); ratio > best {
-					best = ratio
-				}
-				competitors++
-			}
-			if !s.utf8 && velozVectorBits() == 256 {
-				if ratio := pairedRatio(candidate, func() { sink = runSingleScenario(veloz.IndexFold, s) }); ratio > best {
-					best = ratio
-				}
-				competitors++
-			}
-			for b.Loop() {
-				candidate()
-			}
-			b.ReportMetric(best, "x_vs_best")
-			b.ReportMetric(float64(competitors), "competitors")
-			b.ReportMetric(float64(competitors+1), "entrants")
-			reportSingleDispatch(b, s)
-		})
+		b.Run("single/"+s.name, func(b *testing.B) { benchSingle(b, s) })
 	}
 
 	for scenarioIndex, s := range multiScenarios {
@@ -284,5 +255,31 @@ func BenchmarkBar(b *testing.B) {
 			b.ReportMetric(float64(competitors+1+supplemental), "entrants")
 			reportMultiDispatch(b, s, m.VectorBits(), rure, rust, vscan)
 		})
+	}
+}
+
+// TestSingleFieldCountsRustAC holds single rows to the field rule for the Rust
+// aho-corasick entrant: it is exact on the ASCII tier, so every ASCII single
+// scenario times it and no UTF-8 one does.
+func TestSingleFieldCountsRustAC(t *testing.T) {
+	for _, s := range singleScenarios {
+		timed := slices.ContainsFunc(singleField(s), func(im impl) bool { return im.name == "rustac" })
+		if timed != !s.utf8 {
+			t.Errorf("%s (utf8=%v): rustac timed=%v", s.name, s.utf8, timed)
+		}
+	}
+}
+
+// TestTimeWindowCountsWork holds every timing window to at least one operation
+// and a positive, finite time per operation. A zero budget is the case where
+// the budget is already spent when the window first checks the clock, as
+// after a preemption.
+func TestTimeWindowCountsWork(t *testing.T) {
+	for _, budget := range []time.Duration{-time.Millisecond, 0, time.Millisecond} {
+		calls := 0
+		ns := timeWindow(func() { calls++ }, budget)
+		if calls < 1 || !(ns > 0) || math.IsInf(ns, 0) {
+			t.Errorf("budget %v: %d calls, %v ns/op; want at least one call and a positive finite time", budget, calls, ns)
+		}
 	}
 }

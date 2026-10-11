@@ -27,14 +27,15 @@ package arena_test
 //                the semantic anchor (exact simple folding)
 //   pcre2-jit  - precompiled PCRE2 caseless UTF-8 literal, with JIT required
 //                before it enters either valid-UTF-8 tier (including ASCII)
-//   rure       - precompiled rust-regex C API (?i) literal, kept for Unicode
-//                simple-fold agreement and admitted to the field only after its
-//                exact query observes the audited memchr AVX2 backend
+//   rure       - precompiled rust-regex C API (?i) literal; its audited
+//                memchr width is a diagnostic and never removes it
 //   vectorscan - precompiled Vectorscan caseless UTF-8 literal set, with a
 //                leftmost/lowest-ID adapter timed with each scan
 //   stringzilla - precompiled StringZilla full-fold literal, with timed
 //                simple-fold verification and multi-pattern reduction
 //   veloz      - github.com/mhr3/veloz/ascii.IndexFold (ASCII tier only)
+//   rustac     - Rust aho-corasick DFA with ASCII case insensitivity, as an
+//                N=1 pattern set (ASCII tier only)
 //   ceiling    - strings.Index on pre-folded input: exact-match physics,
 //                what caseless search costs if folding were free
 
@@ -185,49 +186,36 @@ func indexRegexp(h, n string) int {
 	return loc[0]
 }
 
-var impls = func() []struct {
+// impl is one single-needle implementation on the scenario matrix.
+type impl struct {
 	name      string
 	index     func(h, n string) int
 	asciiOnly bool // skip entirely on UTF-8 tier scenarios
-	utf8Only  bool // skip entirely on ASCII tier scenarios
-	foldExact bool // implements simple folding on its declared tier
-} {
-	out := []struct {
-		name      string
-		index     func(h, n string) int
-		asciiOnly bool
-		utf8Only  bool
-		foldExact bool
-	}{
-		{"candidate", casei.IndexFold, false, false, true},
-		{"tolower", indexToLower, false, false, false}, // agreement on ASCII tier only: ToLower is not folding
-		{"regexp", indexRegexp, false, false, true},
-		{"pcre2-jit", indexPCRE2, false, false, true},
-		{"rure", indexRure, false, false, true},
-		{"vectorscan", indexVectorscan, false, false, true},
+	foldExact bool // exact on its declared tier: counts toward x_vs_best there
+}
+
+// supports reports whether the implementation runs on the scenario's tier.
+func (im impl) supports(s scenario) bool { return !s.utf8 || !im.asciiOnly }
+
+var impls = func() []impl {
+	out := []impl{
+		{"candidate", casei.IndexFold, false, true},
+		{"tolower", indexToLower, false, false}, // agreement on ASCII tier only: ToLower is not folding
+		{"regexp", indexRegexp, false, true},
+		{"pcre2-jit", indexPCRE2, false, true},
+		{"rure", indexRure, false, true},
+		{"vectorscan", indexVectorscan, false, true},
 	}
 	if stringZillaAvailable {
-		out = append(out, struct {
-			name      string
-			index     func(h, n string) int
-			asciiOnly bool
-			utf8Only  bool
-			foldExact bool
-		}{"stringzilla", indexStringZilla, false, false, true})
+		out = append(out, impl{"stringzilla", indexStringZilla, false, true})
 	}
 	// Veloz's source uses AVX2 when available and falls back below it. The
 	// weaker implementation is excluded instead of being raced under the same
 	// entrant name.
 	if velozVectorBits() == 256 {
-		out = append(out, struct {
-			name      string
-			index     func(h, n string) int
-			asciiOnly bool
-			utf8Only  bool
-			foldExact bool
-		}{"veloz", veloz.IndexFold, true, false, false})
+		out = append(out, impl{"veloz", veloz.IndexFold, true, true})
 	}
-	return out
+	return append(out, impl{"rustac", indexRustAC, true, true})
 }()
 
 // countAll counts overlap-allowed occurrences by repeated first-match calls,
@@ -277,7 +265,7 @@ func TestBaselinesAgree(t *testing.T) {
 			wantCount = countAll(reference, s.haystack, s.needle)
 		}
 		for _, im := range impls {
-			if (s.utf8 && (im.asciiOnly || !im.foldExact)) || (!s.utf8 && im.utf8Only) {
+			if !im.supports(s) || s.utf8 && !im.foldExact {
 				continue
 			}
 			if got := im.index(s.haystack, s.needle); got != want {
@@ -295,7 +283,7 @@ func TestBaselinesAgree(t *testing.T) {
 func BenchmarkIndexFold(b *testing.B) {
 	for _, s := range scenarios {
 		for _, im := range impls {
-			if (s.utf8 && im.asciiOnly) || (!s.utf8 && im.utf8Only) {
+			if !im.supports(s) {
 				continue
 			}
 			b.Run(s.name+"/"+im.name, func(b *testing.B) {

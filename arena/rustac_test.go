@@ -32,6 +32,36 @@ var rustACAlts = func() []*rustACMatcher {
 	return out
 }()
 
+// rustACSingles holds one compiled matcher per needle of the ASCII-tier single
+// scenarios. The entrant is exact for ASCII only (field.yaml), so UTF-8
+// scenarios never reach it.
+var rustACSingles = func() map[string]*rustACMatcher {
+	out := make(map[string]*rustACMatcher)
+	for _, s := range singleScenarios {
+		if _, ok := out[s.needle]; !ok && !s.utf8 {
+			m, err := rustac.Compile([]string{s.needle})
+			if err != nil {
+				panic(fmt.Sprintf("Rust Aho-Corasick baseline unavailable for %q: %v", s.needle, err))
+			}
+			out[s.needle] = m
+		}
+	}
+	return out
+}()
+
+// indexRustAC answers a single-needle scenario with the Rust DFA's leftmost
+// match.
+func indexRustAC(haystack, needle string) int {
+	m := rustACSingles[needle]
+	if m == nil {
+		panic(fmt.Sprintf("Rust Aho-Corasick baseline was not compiled for %q", needle))
+	}
+	if start, _, ok := m.Find(haystack); ok {
+		return start
+	}
+	return -1
+}
+
 func TestRustACAlternationAgree(t *testing.T) {
 	cases := []struct {
 		haystack string

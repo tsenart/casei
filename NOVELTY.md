@@ -1761,7 +1761,7 @@ variable-width raw confirmation, and the wider sparse tagged schedule. No
 isolated novelty claim is made for it. The combined source passed every sample
 of the 36-row paired field on both hosts, against the entrants the arena counted
 then (rust/regex counted on only one row, and Rust Aho-Corasick was left out of
-one row): worst medians were 0.9624 on Ice Lake
+20 rows): worst medians were 0.9624 on Ice Lake
 and 0.9716 on Sapphire Rapids. It also moved all five same-contract Rebar rows
 below 1.0 on both hosts, with worst ratios 0.8794 and 0.8999. Those external
 rows are the result the prior construction did not hold.
