@@ -18,8 +18,9 @@ These receipts predate the rule that every pinned entrant counts toward
 could not see its vector width. On each host it counted rust/regex only on
 `single/code_hit_brackets_256kb`: 66 of 69 single-row samples and all 39
 multi-row samples have `rure_active=0`. Rust Aho-Corasick was also left out of
-`multi/multi_N8_hit_log_1mb`: all three samples on each host have
-`rustac_active=0`. They record the prior field. They are not a result against
+20 rows on each host: the arena never timed it on single rows, so the 19 ASCII
+single rows it supports carry no `rustac_active` metric, and all three samples
+of `multi/multi_N8_hit_log_1mb` have `rustac_active=0`. They record the prior field. They are not a result against
 the full field.
 
 ## Verify the receipts
