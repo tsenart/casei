@@ -8,6 +8,7 @@ package arena_test
 
 import (
 	"fmt"
+	"math"
 	"slices"
 	"sort"
 	"testing"
@@ -22,17 +23,23 @@ import (
 	vectorscan "github.com/tsenart/casei/arena/vectorscan"
 )
 
-// timeWindow returns ns/op for one manually timed window. testing.Benchmark
-// cannot be nested inside a running benchmark.
-func timeWindow(op func()) float64 {
-	const budget = 25 * time.Millisecond
-	n := 0
+// windowBudget is the minimum length of one timing window.
+const windowBudget = 25 * time.Millisecond
+
+// timeWindow returns ns/op for one manually timed window of at least budget.
+// It runs op before it reads the clock, so a window always counts at least one
+// operation, and it ends only after the monotonic clock has advanced by budget
+// and by more than zero, so a window never divides by no time. A preempted
+// first check or a coarse clock therefore cannot produce an empty window.
+// testing.Benchmark cannot be nested inside a running benchmark.
+func timeWindow(op func(), budget time.Duration) float64 {
 	start := time.Now()
-	for time.Since(start) < budget {
+	for n := 1; ; n++ {
 		op()
-		n++
+		if elapsed := time.Since(start); elapsed >= budget && elapsed > 0 {
+			return float64(elapsed.Nanoseconds()) / float64(n)
+		}
 	}
-	return float64(time.Since(start).Nanoseconds()) / float64(n)
 }
 
 // pairedRatio measures the candidate beside one competitor six times, with
@@ -46,11 +53,11 @@ func pairedRatio(candidate, competitor func()) float64 {
 	for round := range ratios {
 		var candidateNS, competitorNS float64
 		if round%2 == 0 {
-			candidateNS = timeWindow(candidate)
-			competitorNS = timeWindow(competitor)
+			candidateNS = timeWindow(candidate, windowBudget)
+			competitorNS = timeWindow(competitor, windowBudget)
 		} else {
-			competitorNS = timeWindow(competitor)
-			candidateNS = timeWindow(candidate)
+			competitorNS = timeWindow(competitor, windowBudget)
+			candidateNS = timeWindow(candidate, windowBudget)
 		}
 		ratios[round] = candidateNS / competitorNS
 	}
@@ -259,6 +266,20 @@ func TestSingleFieldCountsRustAC(t *testing.T) {
 		timed := slices.ContainsFunc(singleField(s), func(im impl) bool { return im.name == "rustac" })
 		if timed != !s.utf8 {
 			t.Errorf("%s (utf8=%v): rustac timed=%v", s.name, s.utf8, timed)
+		}
+	}
+}
+
+// TestTimeWindowCountsWork holds every timing window to at least one operation
+// and a positive, finite time per operation. A zero budget is the case where
+// the budget is already spent when the window first checks the clock, as
+// after a preemption.
+func TestTimeWindowCountsWork(t *testing.T) {
+	for _, budget := range []time.Duration{-time.Millisecond, 0, time.Millisecond} {
+		calls := 0
+		ns := timeWindow(func() { calls++ }, budget)
+		if calls < 1 || !(ns > 0) || math.IsInf(ns, 0) {
+			t.Errorf("budget %v: %d calls, %v ns/op; want at least one call and a positive finite time", budget, calls, ns)
 		}
 	}
 }
