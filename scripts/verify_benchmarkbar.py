@@ -107,10 +107,13 @@ BASE_METRICS = (
     "stringzilla_vector_bits",
     "veloz_active",
     "veloz_vector_bits",
-)
-MULTI_METRICS = (
     "rustac_active",
     "rustac_vector_bits",
+)
+# FIELD names the entrants whose time can establish x_vs_best. The Go
+# Aho-Corasick control is supplemental: it is an entrant, not a competitor.
+FIELD = ("regexp", "pcre2", "rure", "vectorscan", "stringzilla", "veloz", "rustac")
+MULTI_METRICS = (
     "go_ac_active",
     "go_ac_vector_bits",
 )
@@ -220,31 +223,27 @@ def verify(path, expected_samples=3, require_wins=True, required_rows=REQUIRED_R
                 }
             )
             # Every pinned entrant that supports a row counts. Rure supports
-            # every row; Rust aho-corasick supports the non-UTF-8 multi rows.
-            # Their dispatched widths are diagnostics, so they are not pinned.
+            # every row; Rust aho-corasick supports every ASCII row, single
+            # and multi. Their dispatched widths are diagnostics, so they are
+            # not pinned where the entrant runs.
             expected["rure_active"] = 1
+            expected["rustac_active"] = int(not utf8)
+            if utf8:
+                expected["rustac_vector_bits"] = 0
             if multi:
                 expected.update(
                     {
-                        "rustac_active": int(not utf8),
                         "go_ac_active": int(not utf8),
                         "go_ac_vector_bits": 0,
                     }
                 )
-                if utf8:
-                    expected["rustac_vector_bits"] = 0
             for metric, want in expected.items():
                 if sample[metric] != want:
                     raise VerificationError(
                         f"{path}: {label} has {metric}={sample[metric]:g}, want {want}"
                     )
-            competitors = 4 + int(sample["rure_active"])
-            if multi:
-                competitors += int(sample["rustac_active"])
-                supplemental = int(sample["go_ac_active"])
-            else:
-                competitors += int(sample["veloz_active"])
-                supplemental = 0
+            competitors = sum(int(sample[f"{name}_active"]) for name in FIELD)
+            supplemental = int(sample["go_ac_active"]) if multi else 0
             if sample["competitors"] != competitors:
                 raise VerificationError(
                     f"{path}: {label} has competitors={sample['competitors']:g}, "

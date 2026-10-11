@@ -29,20 +29,17 @@ def row(
     veloz_active = int(not multi and not utf8)
     veloz_bits = 256 if veloz_active else 0
     if rustac_active is None:
-        rustac_active = int(multi and not utf8)
+        rustac_active = int(not utf8)
     if rustac_bits is None:
         rustac_bits = 256 if rustac_active else 0
     go_ac_active = int(multi and not utf8)
     if competitors is None:
-        competitors = 4 + rure_active + (rustac_active if multi else veloz_active)
+        competitors = 4 + rure_active + veloz_active + rustac_active
     if entrants is None:
         entrants = 1 + competitors + go_ac_active
     multi_metrics = ""
     if multi:
-        multi_metrics = (
-            f"{rustac_active} rustac_active {rustac_bits} rustac_vector_bits "
-            f"{go_ac_active} go_ac_active 0 go_ac_vector_bits "
-        )
+        multi_metrics = f"{go_ac_active} go_ac_active 0 go_ac_vector_bits "
     return (
         f"BenchmarkBar/{name}-8 30 100 ns/op "
         f"{ratio} x_vs_best {competitors} competitors {entrants} entrants "
@@ -54,6 +51,7 @@ def row(
         f"{vbmi} vectorscan_vbmi "
         f"1 stringzilla_active {stringzilla_bits} stringzilla_vector_bits "
         f"{veloz_active} veloz_active {veloz_bits} veloz_vector_bits "
+        f"{rustac_active} rustac_active {rustac_bits} rustac_vector_bits "
         f"{multi_metrics}\n"
     )
 
@@ -115,10 +113,10 @@ class VerifyBenchmarkBarTest(unittest.TestCase):
         with self.assertRaisesRegex(verify.VerificationError, "rure_active"):
             self.verify_text(text)
 
-    def test_rejects_rustac_on_utf8_multi_row(self):
+    def test_rejects_rustac_on_utf8_row(self):
         text = "".join(
             row(name, rustac_active=1, rustac_bits=256)
-            if name.startswith("multi/") and verify.is_utf8_row(name)
+            if verify.is_utf8_row(name)
             else row(name)
             for name in sorted(verify.REQUIRED_ROWS)
             for _ in range(3)
@@ -139,6 +137,26 @@ class VerifyBenchmarkBarTest(unittest.TestCase):
             for _ in range(3)
         )
         with self.assertRaisesRegex(verify.VerificationError, "rustac_active"):
+            self.verify_text(text)
+
+    def test_rejects_dropped_rustac_on_single_row(self):
+        text = "".join(
+            row(name, rustac_active=0, rustac_bits=0)
+            if name.startswith("single/") and not verify.is_utf8_row(name)
+            else row(name)
+            for name in sorted(verify.REQUIRED_ROWS)
+            for _ in range(3)
+        )
+        with self.assertRaisesRegex(verify.VerificationError, "rustac_active"):
+            self.verify_text(text)
+
+    def test_rejects_single_row_without_rustac_metrics(self):
+        name = "single/log_miss_1mb"
+        text = "".join(
+            line.split(" 1 rustac_active")[0] + "\n" if f"/{name.split('/', 1)[1]}-" in line else line
+            for line in transcript().splitlines(keepends=True)
+        )
+        with self.assertRaisesRegex(verify.VerificationError, "missing rustac_active"):
             self.verify_text(text)
 
     def test_rustac_width_is_diagnostic(self):
