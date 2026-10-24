@@ -75,9 +75,8 @@ native="${CASEI_NATIVE_DIR:-$(mktemp -d)}"
 mkdir -p "$native"
 export GOPATH="${GOPATH:-$native/go}"
 export GOCACHE="${GOCACHE:-$native/go-build}"
-# rure's Cargo registry and target tree are part of this field build. Keep them
-# in the caller-owned native directory instead of a shared host CARGO_HOME.
-export CARGO_HOME="$native/cargo-home"
+# rure's Cargo registry and target tree are part of this field build. Default them to the caller-owned native directory; keep a caller's CARGO_HOME so repeated builds reuse its cache.
+export CARGO_HOME="${CARGO_HOME:-$native/cargo-home}"
 cd "$root/arena"
 for dep in pcre2 vectorscan rure rustac stringzilla; do
   echo "==> Building competitor from source: $dep"
